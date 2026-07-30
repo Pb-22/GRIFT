@@ -19,6 +19,17 @@ def _parse_simple_yaml(text: str) -> dict[str, Any]:
     )
 
 
+def derive_acronym(name: str) -> str:
+    """Derive a conservative acronym from a multiword product name."""
+    words = re.findall(r"[A-Za-z0-9]+", name)
+    if len(words) < 2:
+        return ""
+    acronym = "".join(w[0].upper() for w in words if w)
+    if 2 <= len(acronym) <= 16:
+        return acronym
+    return ""
+
+
 def parse_product_line(value: str | dict[str, Any]) -> dict[str, str]:
     """Parse product alias entries such as '"SQL Server Management Studio" SSMS'."""
     if isinstance(value, dict):
@@ -31,8 +42,7 @@ def parse_product_line(value: str | dict[str, Any]) -> dict[str, str]:
         m = re.match(r"^'([^']+)'\s+([A-Za-z0-9_.+-]{2,16})$", text)
     if m:
         return {"full": m.group(1).strip(), "acronym": m.group(2).strip()}
-    return {"full": text, "acronym": ""}
-
+    return {"full": text, "acronym": derive_acronym(text)}
 
 def _append_unique(values: list[str], value: str) -> None:
     if value and value not in values:
@@ -83,6 +93,37 @@ def load_brands(path: Path) -> dict[str, Any]:
     return data
 
 
+def validate_brands(data: dict[str, Any]) -> list[str]:
+    """Return human-readable validation issues for a loaded brands.yaml document."""
+    issues: list[str] = []
+    brands = data.get("brands")
+    if not isinstance(brands, list) or not brands:
+        return ["brands.yaml has no brands; add one with --add-brand or --import-apps input/apps.txt"]
+    seen: set[str] = set()
+    for idx, b in enumerate(brands, start=1):
+        if not isinstance(b, dict):
+            issues.append(f"brand #{idx} is not a mapping")
+            continue
+        name = str(b.get("name") or "").strip()
+        if not name:
+            issues.append(f"brand #{idx} is missing name")
+        elif name.lower() in seen:
+            issues.append(f"brand '{name}' is duplicated")
+        else:
+            seen.add(name.lower())
+        queries = b.get("queries") or []
+        if not isinstance(queries, list) or not [q for q in queries if str(q).strip()]:
+            issues.append(f"brand '{name or f'#{idx}'}' has no queries")
+        products = b.get("products") or b.get("product_aliases") or []
+        for product in products:
+            alias = parse_product_line(product)
+            if alias.get("full") and " " in alias["full"] and not alias.get("acronym"):
+                issues.append(
+                    f"brand '{name or f'#{idx}'}' has multiword product '{alias['full']}' without acronym; use \"{alias['full']}\" {derive_acronym(alias['full']) or 'ACRONYM'}"
+                )
+    return issues
+
+
 def save_brands(path: Path, data: dict[str, Any]) -> None:
     if yaml is None:
         raise RuntimeError("PyYAML is required to save brands.yaml")
@@ -104,8 +145,20 @@ def add_brand(
 ) -> dict[str, Any]:
     data = load_brands(path)
     brands = data.setdefault("brands", [])
+    alias = parse_product_line(name)
+    stored_name = alias.get("acronym") or alias.get("full") or name
+    product_seed = f'"{alias["full"]}" {alias["acronym"]}' if alias.get("full") and alias.get("acronym") else ""
+    if not queries:
+        if product_seed:
+            products = list(products or [])
+            if product_seed not in products:
+                products.append(product_seed)
+            queries = []
+            ambiguous_brand = True if ambiguous_brand is None else ambiguous_brand
+        else:
+            queries = [f"{stored_name} download windows", f"{stored_name} Windows Download", f"{stored_name} in:name"]
     for b in brands:
-        if b.get("name", "").lower() == name.lower():
+        if b.get("name", "").lower() == stored_name.lower():
             existing_q = list(b.get("queries") or [])
             for q in queries:
                 if q not in existing_q:
@@ -137,7 +190,7 @@ def add_brand(
             save_brands(path, data)
             return b
     entry = {
-        "name": name,
+        "name": stored_name,
         "queries": queries,
         "official_orgs": official_orgs or [],
         "official_domains": official_domains or [],

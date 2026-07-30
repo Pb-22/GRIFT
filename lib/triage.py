@@ -8,15 +8,24 @@ passes the explicit malware-submission safety flag.
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import re
 import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 DEFAULT_BASE_URL = "https://tria.ge/api"
 USER_AGENT = "GRIFT/1.0 (defensive research)"
+CERTIFICATE_INFRASTRUCTURE_HOSTS = {
+    "timestamp.digicert.com",
+    "timestamp.intel.com",
+    "www.digicert.com",
+    "pki.intel.com",
+}
 
 UrlOpener = Callable[..., Any]
 
@@ -126,6 +135,19 @@ class TriageClient:
         except Exception as e:
             return {"ok": False, "status": None, "error": f"{type(e).__name__}: {e}"}
 
+    def validate_key(self) -> dict[str, Any]:
+        """Validate the tria.ge API key without returning the key."""
+        response = self._request("GET", "/v0/profiles")
+        if response.get("ok"):
+            return {"ok": True, "service": "tria.ge", "status": "valid"}
+        return {
+            "ok": False,
+            "service": "tria.ge",
+            "status": "invalid",
+            "error": response.get("error") or "validation failed",
+            "http_status": response.get("status"),
+        }
+
     def lookup_url(self, url: str, *, passwords: Optional[list[str]] = None) -> dict[str, Any]:
         """Search existing tria.ge reports for a URL indicator and retain password context."""
         passwords = [p for p in (passwords or []) if p]
@@ -152,6 +174,41 @@ class TriageClient:
             if "data" in response:
                 result["details"] = response["data"]
         return result
+
+    def get_json(self, path: str) -> dict[str, Any]:
+        """Fetch an arbitrary tria.ge JSON API path."""
+        response = self._request("GET", path)
+        if response.get("ok"):
+            return {"ok": True, "status": response.get("status"), "data": response.get("data") or {}}
+        return {
+            "ok": False,
+            "status": response.get("status"),
+            "error": response.get("error") or "request failed",
+            "data": response.get("data") or {},
+        }
+
+    def collect_report(self, sample_id: str, *, include_static: bool = True) -> dict[str, Any]:
+        """Pull the useful available report surfaces for a sample id."""
+        sample_id = sample_id.strip()
+        report: dict[str, Any] = {"sample_id": sample_id, "sample": {}, "summary": {}, "static": {}, "errors": []}
+        sample = self.get_json(f"/v0/samples/{urllib.parse.quote(sample_id)}")
+        if sample.get("ok"):
+            report["sample"] = sample.get("data") or {}
+        else:
+            report["errors"].append({"surface": "sample", "error": sample})
+        summary = self.get_json(f"/v0/samples/{urllib.parse.quote(sample_id)}/summary")
+        if summary.get("ok"):
+            report["summary"] = summary.get("data") or {}
+        else:
+            report["errors"].append({"surface": "summary", "error": summary})
+        if include_static:
+            static = self.get_json(f"/v0/samples/{urllib.parse.quote(sample_id)}/static")
+            if static.get("ok"):
+                report["static"] = static.get("data") or {}
+            else:
+                report["errors"].append({"surface": "static", "error": static})
+        report["summary_iocs"] = summarize_triage_report(report)
+        return report
 
     def submit_url(
         self,
@@ -210,6 +267,7 @@ def enrich_candidates_with_triage(
     submit: bool = False,
     max_urls_per_candidate: int = 3,
     submit_profile: str = "default",
+    submit_on_lookup_error: bool = False,
 ) -> dict[str, Any]:
     """Attach tria.ge lookup/submit results to candidates above a score threshold."""
     summary = {
@@ -244,7 +302,10 @@ def enrich_candidates_with_triage(
             if not lookup.get("ok"):
                 summary["errors"] += 1
             if submit:
-                if lookup.get("ok") and int(lookup.get("matches") or 0) == 0:
+                should_submit = bool(lookup.get("ok") and int(lookup.get("matches") or 0) == 0)
+                if not lookup.get("ok") and submit_on_lookup_error:
+                    should_submit = True
+                if should_submit:
                     submitted = client.submit_url(url, password=password, profile=submit_profile)
                     triage_block["submissions"].append(submitted)
                     summary["submits_attempted"] += 1
@@ -261,6 +322,204 @@ def enrich_candidates_with_triage(
                         }
                     )
     return summary
+
+
+def summarize_triage_report(report: dict[str, Any], *, min_report_score: int = 5) -> dict[str, Any]:
+    """Produce a compact summary from tria.ge-scored report surfaces.
+
+    tria.ge uses report/task/signature scores as the confidence signal. Do not
+    scrape every URL/domain-looking string out of static metadata: that promotes
+    benign certificate infrastructure such as CRL and timestamp URLs into fake
+    IoCs. Only promote artifacts tied to tasks/signatures at or above
+    ``min_report_score``.
+    """
+    sample = report.get("sample") or {}
+    summary_doc = report.get("summary") or {}
+    static = report.get("static") or {}
+    sample_id = report.get("sample_id") or sample.get("id") or summary_doc.get("sample")
+    out: dict[str, Any] = {
+        "sample_id": sample_id,
+        "status": sample.get("status") or summary_doc.get("status"),
+        "score": summary_doc.get("score") or _dig(static, "analysis", "score"),
+        "target": sample.get("filename") or summary_doc.get("target") or _dig(static, "sample", "target"),
+        "sha256": sample.get("sha256") or summary_doc.get("sha256") or _dig(static, "sample", "sha256"),
+        "min_report_score": min_report_score,
+        "signatures": [],
+        "high_score_tasks": [],
+        "selected_files": [],
+        "selected_file_hashes": [],
+        "iocs": {"sha256": [], "sha1": [], "md5": [], "urls": [], "domains": [], "ips": []},
+    }
+
+    if out.get("sha256"):
+        out["iocs"]["sha256"].append(str(out["sha256"]))
+
+    high_targets: set[str] = set()
+    tasks = summary_doc.get("tasks") if isinstance(summary_doc.get("tasks"), dict) else {}
+    for task_id, task in (tasks or {}).items():
+        if not isinstance(task, dict):
+            continue
+        score = int(task.get("score") or 0)
+        if score < min_report_score:
+            continue
+        target = task.get("target") or task.get("task") or task.get("pick")
+        out["high_score_tasks"].append(
+            {
+                "id": str(task_id),
+                "kind": task.get("kind"),
+                "score": score,
+                "target": target,
+                "sigs": task.get("sigs"),
+                "os": task.get("os"),
+            }
+        )
+        if target:
+            high_targets.add(str(target).split("/")[-1])
+            if str(target) not in out["selected_files"]:
+                out["selected_files"].append(str(target))
+
+    for sig in static.get("signatures") or []:
+        if not isinstance(sig, dict):
+            continue
+        score = int(sig.get("score") or 0)
+        if score < min_report_score:
+            continue
+        name = sig.get("name") or sig.get("label")
+        if name and name not in out["signatures"]:
+            out["signatures"].append(str(name))
+        for indicator in sig.get("indicators") or []:
+            if isinstance(indicator, dict):
+                resource = indicator.get("resource")
+                if resource:
+                    high_targets.add(str(resource).split("/")[-1])
+
+    for f in static.get("files") or []:
+        if not isinstance(f, dict):
+            continue
+        filename = str(f.get("filename") or f.get("relpath") or "")
+        if not filename or filename.split("/")[-1] not in high_targets:
+            continue
+        if filename not in out["selected_files"]:
+            out["selected_files"].append(filename)
+        hash_ref = {"filename": filename}
+        for key in ("sha256", "sha1", "md5"):
+            val = f.get(key)
+            if val:
+                hash_ref[key] = str(val)
+            if val and val not in out["iocs"][key]:
+                out["iocs"][key].append(str(val))
+        if any(k in hash_ref for k in ("sha256", "sha1", "md5")) and hash_ref not in out["selected_file_hashes"]:
+            out["selected_file_hashes"].append(hash_ref)
+
+    for key, limit in (("sha256", 30), ("sha1", 30), ("md5", 30), ("urls", 30), ("domains", 50), ("ips", 50)):
+        out["iocs"][key] = out["iocs"][key][:limit]
+    out["signatures"] = out["signatures"][:20]
+    out["high_score_tasks"] = out["high_score_tasks"][:30]
+    out["selected_files"] = out["selected_files"][:30]
+    return out
+
+
+def write_triage_report_outputs(out_dir: Path, sample_id: str, report: dict[str, Any]) -> dict[str, Path]:
+    """Write tria.ge report JSON and IOC Markdown summary."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", sample_id)
+    json_path = out_dir / f"triage_report_{safe_id}.json"
+    md_path = out_dir / f"triage_report_{safe_id}.md"
+    json_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    s = report.get("summary_iocs") or summarize_triage_report(report)
+    lines = [
+        f"# tria.ge report summary — `{safe_id}`",
+        "",
+        f"- Status: `{s.get('status')}`",
+        f"- Score: `{s.get('score')}`",
+        f"- Target: `{s.get('target')}`",
+        f"- SHA256: `{s.get('sha256')}`",
+        "",
+        "## High-scoring tria.ge tasks",
+    ]
+    for task in s.get("high_score_tasks") or []:
+        lines.append(
+            f"- score `{task.get('score')}` `{task.get('kind')}` target `{task.get('target')}`"
+            f" os `{task.get('os')}` sigs `{task.get('sigs')}`"
+        )
+    if not s.get("high_score_tasks"):
+        lines.append(f"- none at or above score `{s.get('min_report_score')}`")
+    lines.extend(["", "## Signatures at threshold"])
+    for sig in s.get("signatures") or []:
+        lines.append(f"- {sig}")
+    if not s.get("signatures"):
+        lines.append(f"- none at or above score `{s.get('min_report_score')}`")
+    lines.extend(["", "## Selected / high-scoring files"])
+    file_hashes = s.get("selected_file_hashes") or []
+    if file_hashes:
+        for f in file_hashes:
+            parts = [f"`{f.get('filename')}`"]
+            for key in ("sha256", "sha1", "md5"):
+                if f.get(key):
+                    parts.append(f"{key} `{f.get(key)}`")
+            lines.append("- " + " — ".join(parts))
+    else:
+        for f in s.get("selected_files") or []:
+            lines.append(f"- `{f}`")
+    if not s.get("selected_files") and not file_hashes:
+        lines.append(f"- none at or above score `{s.get('min_report_score')}`")
+    lines.extend(["", "## IoCs"])
+    labels = [("sha256", "SHA256"), ("sha1", "SHA1"), ("md5", "MD5"), ("urls", "URLs"), ("domains", "Domains"), ("ips", "IPs")]
+    for key, label in labels:
+        vals = (s.get("iocs") or {}).get(key) or []
+        lines.append(f"### {label}")
+        if vals:
+            for val in vals:
+                lines.append(f"- `{val}`")
+        else:
+            lines.append("- none observed in pulled report surfaces")
+        lines.append("")
+    if report.get("errors"):
+        lines.append("## Pull errors")
+        for err in report.get("errors") or []:
+            lines.append(f"- `{err.get('surface')}`: `{(err.get('error') or {}).get('status')}` `{(err.get('error') or {}).get('error')}`")
+    md_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return {"json": json_path, "md": md_path}
+
+
+def _is_certificate_noise_url(url: str) -> bool:
+    """Return True for routine certificate/CRL/OCSP infrastructure URLs."""
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").lower()
+    if path.endswith(".crl") or "/crl/" in path:
+        return True
+    if host.startswith(("crl.", "crl3.", "crl4.", "ocsp.", "ocsp2.")):
+        return True
+    if host in CERTIFICATE_INFRASTRUCTURE_HOSTS:
+        return True
+    return False
+
+
+def _is_certificate_noise_domain(domain: str) -> bool:
+    """Return True for certificate infrastructure hosts and extracted CRL/PDB filenames."""
+    d = domain.lower().strip(".")
+    if d.endswith((".crl", ".pdb")):
+        return True
+    if d.startswith(("crl.", "crl3.", "crl4.", "ocsp.", "ocsp2.")):
+        return True
+    if d in CERTIFICATE_INFRASTRUCTURE_HOSTS:
+        return True
+    return False
+
+
+def _is_certificate_oid_token(token: str) -> bool:
+    """Filter ASN.1/X.509 OID prefixes that are often scraped as IPv4-looking IoCs."""
+    return token.startswith(("1.2.840.", "1.3.6.", "2.5.4."))
+
+
+def _dig(obj: dict[str, Any], *path: str) -> Any:
+    cur: Any = obj
+    for item in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(item)
+    return cur
 
 
 def _summarize_search_hit(hit: dict[str, Any]) -> dict[str, Any]:

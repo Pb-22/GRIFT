@@ -17,14 +17,14 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from lib.brands import add_brand, load_brands, parse_product_line  # noqa: E402
+from lib.brands import add_brand, load_brands, parse_product_line, validate_brands  # noqa: E402
 from lib.enrich import enrich_top_urls  # noqa: E402
 from lib.extract import extract_from_readme  # noqa: E402
 from lib.github_client import GitHubClient, GitHubRateLimitError  # noqa: E402
-from lib.keys import resolve_keys  # noqa: E402
+from lib.keys import prompt_with_timeout, resolve_keys  # noqa: E402
 from lib.report import write_outputs  # noqa: E402
 from lib.score import score_candidate  # noqa: E402
-from lib.triage import TriageClient, enrich_candidates_with_triage  # noqa: E402
+from lib.triage import TriageClient, enrich_candidates_with_triage, write_triage_report_outputs  # noqa: E402
 
 
 def build_query(base: str, created_after: Optional[str]) -> str:
@@ -59,12 +59,14 @@ def import_apps_file(path: Path, brands_path: Path) -> list[dict[str, Any]]:
             continue
         alias = parse_product_line(line)
         if alias.get("acronym"):
-            name = alias["acronym"]
+            full = alias.get("full") or line
+            acronym = alias["acronym"]
+            seed = f'"{full}" {acronym}'
             entry = add_brand(
                 brands_path,
-                name,
+                seed,
                 queries=[],
-                products=[line],
+                products=[seed],
                 ambiguous_brand=True,
                 notes="imported from apps file",
             )
@@ -83,6 +85,71 @@ def import_apps_file(path: Path, brands_path: Path) -> list[dict[str, Any]]:
             )
         imported.append(entry)
     return imported
+
+
+def review_configured_brands(
+    brands_path: Path,
+    *,
+    non_interactive: bool,
+    prompt_timeout: Optional[float],
+) -> None:
+    """Show the configured app list and allow quick import before a run."""
+    data = load_brands(brands_path)
+    print("\nConfigured GRIFT app targets")
+    print(f"  file: {brands_path}")
+    for b in data.get("brands") or []:
+        queries = b.get("queries") or []
+        products = b.get("product_aliases") or b.get("products") or []
+        print(f"  - {b.get('name')} ({len(queries)} quer{'y' if len(queries) == 1 else 'ies'})")
+        for product in products:
+            if isinstance(product, dict):
+                full = product.get("full")
+                acronym = product.get("acronym")
+                if full and acronym:
+                    print(f"      product: \"{full}\" {acronym}")
+            else:
+                print(f"      product: {product}")
+        for q in queries[:4]:
+            print(f"      q: {q}")
+        if len(queries) > 4:
+            print(f"      ... {len(queries) - 4} more")
+    if non_interactive:
+        return
+    print("  To add multiword apps, put one per line in input/apps.txt; GRIFT derives an acronym.")
+    print("  Example: SQL Server Management Studio -> \"SQL Server Management Studio\" SSMS")
+    ans = prompt_with_timeout(
+        "Review app list: press Enter to continue, type 'import /path/apps.txt', or 'edit' to stop and edit: ",
+        default="",
+        timeout=prompt_timeout,
+        non_interactive=False,
+    ).strip()
+    if not ans:
+        return
+    if ans.lower() == "edit":
+        raise SystemExit(f"Stopped for edits. Update {brands_path} or run --import-apps input/apps.txt, then rerun GRIFT.")
+    if ans.lower().startswith("import "):
+        src = Path(ans.split(None, 1)[1]).expanduser()
+        if not src.is_absolute():
+            src = (ROOT / src).resolve()
+        imported = import_apps_file(src, brands_path)
+        print(f"Imported {len(imported)} app seed(s) from {src}")
+        for entry in imported:
+            print(f"  - {entry.get('name')}")
+        return
+    raise SystemExit("Unrecognized app-list response. Press Enter, type 'edit', or type 'import /path/apps.txt'.")
+
+
+def validate_or_exit(brands_path: Path) -> None:
+    """Validate brands before a run and provide corrective guidance."""
+    issues = validate_brands(load_brands(brands_path))
+    if not issues:
+        print("  app list: valid")
+        return
+    print("Invalid app list:", file=sys.stderr)
+    for issue in issues:
+        print(f"  - {issue}", file=sys.stderr)
+    print("Fix the list with --list-brands, --add-brand, or --import-apps input/apps.txt before running.", file=sys.stderr)
+    raise SystemExit(2)
 
 
 def init_project(root: Path) -> None:
@@ -311,6 +378,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--triage-min-score", type=int, default=8)
     p.add_argument("--triage-max-urls", type=int, default=3, help="Stage 2: max payload URLs per candidate")
     p.add_argument("--triage-profile", default="default", help="Stage 2: tria.ge analysis profile for URL submissions")
+    p.add_argument("--triage-submit-on-lookup-error", action="store_true", help="Stage 2: submit even when lookup times out/fails; still requires submit safety flag")
+    p.add_argument("--triage-report", action="append", dest="triage_reports", help="Stage 2: pull and summarize an existing tria.ge sample id")
     p.add_argument("--i-understand-this-submits-malware", action="store_true")
 
     # mode / keys
@@ -323,6 +392,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--set-github-token", action="store_true", help="Prompt for and store GITHUB_TOKEN in the local .env file")
     p.add_argument("--set-triage-key", action="store_true", help="Prompt for and store TRIAGE_KEY in the local .env file")
     p.add_argument("--import-apps", type=Path, help="Import app seeds from a text file into brands.yaml")
+    p.add_argument("--skip-app-review", action="store_true", help="Do not show/prompt the configured app list before interactive runs")
+    p.add_argument("--validate-only", action="store_true", help="Validate brands.yaml, keys, and arguments, then exit")
 
     # brand maintenance
     p.add_argument("--list-brands", action="store_true")
@@ -378,12 +449,27 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"Imported {len(imported)} app seed(s) into {args.brands}")
         for entry in imported:
             print(f"  - {entry.get('name')}")
+            for product in entry.get("product_aliases") or []:
+                if product.get("full") and product.get("acronym"):
+                    print(f"      product: \"{product['full']}\" {product['acronym']}")
+            for q in entry.get("queries") or []:
+                print(f"      q: {q}")
+        issues = validate_brands(load_brands(args.brands))
+        if issues:
+            print("Imported list needs attention:", file=sys.stderr)
+            for issue in issues:
+                print(f"  - {issue}", file=sys.stderr)
+            return 2
+        print("App list validation: OK")
         return 0
 
     if args.list_brands:
         data = load_brands(args.brands)
         for b in data.get("brands") or []:
             print(f"- {b.get('name')}")
+            for product in b.get("product_aliases") or []:
+                if isinstance(product, dict) and product.get("full") and product.get("acronym"):
+                    print(f"    product: \"{product['full']}\" {product['acronym']}")
             for q in b.get("queries") or []:
                 print(f"    q: {q}")
             if b.get("official_orgs"):
@@ -395,11 +481,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     if args.add_brand:
-        queries = args.add_queries or [f"{args.add_brand} download windows"]
         entry = add_brand(
             args.brands,
             args.add_brand,
-            queries,
+            args.add_queries or [],
             official_orgs=args.official_orgs,
             official_domains=args.official_domains,
             notes=args.notes,
@@ -411,12 +496,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     data = load_brands(args.brands)
+    validate_or_exit(args.brands)
+    if not args.skip_app_review and not args.brands_filter and not args.triage_reports:
+        review_configured_brands(
+            args.brands,
+            non_interactive=non_interactive,
+            prompt_timeout=prompt_timeout,
+        )
+        validate_or_exit(args.brands)
+    data = load_brands(args.brands)
     defaults = data.get("defaults") or {}
     per_query = clamp(args.per_query or int(defaults.get("per_query_results") or 20), 1, 100)
     max_pages = clamp(args.max_pages or int(defaults.get("max_pages") or 3), 1, 10)
     max_candidates = clamp(args.max_candidates or int(defaults.get("max_candidates") or 500), 1, 2000)
     min_score = args.min_score if args.min_score is not None else int(defaults.get("min_score_report") or 4)
-    need_triage = bool(args.triage_lookup or args.triage_submit)
+    need_triage = bool(args.triage_lookup or args.triage_submit or args.triage_reports)
 
     print("GitHub SEO malware hunt")
     print(f"  brands file: {args.brands}")
@@ -438,10 +532,48 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     for note in keys.notes:
         print(f"  key: {note}")
+    if keys.github_token:
+        github_check = GitHubClient(token=keys.github_token).validate_token()
+        if github_check.get("ok"):
+            remain = github_check.get("remaining")
+            limit = github_check.get("limit")
+            suffix = f" (rate limit remaining {remain}/{limit})" if remain is not None and limit is not None else ""
+            print(f"  GitHub token: valid{suffix}")
+        else:
+            print(f"GitHub token validation failed: {github_check.get('error')}", file=sys.stderr)
+            return 2
+    if keys.triage_key and need_triage:
+        triage_check = TriageClient(keys.triage_key).validate_key()
+        if triage_check.get("ok"):
+            print("  tria.ge key: valid")
+        else:
+            print(f"tria.ge key validation failed: {triage_check.get('error')}", file=sys.stderr)
+            return 2
+    if args.validate_only:
+        print("Validation complete: app list and required keys are OK")
+        return 0
     if keys.triage_key and need_triage:
         print("  tria.ge: key resolved for Stage 2 option")
     if not keys.github_token and not non_interactive:
         print("  warning: no GITHUB_TOKEN — unauthenticated API (low rate limits).")
+
+    if args.triage_reports and not (args.triage_lookup or args.triage_submit):
+        if not keys.triage_key:
+            print("tria.ge key not provided; cannot pull report", file=sys.stderr)
+            return 2
+        triage_client = TriageClient(keys.triage_key)
+        for sample_id in args.triage_reports:
+            print(f"  tria.ge: pulling report for {sample_id}")
+            report = triage_client.collect_report(sample_id)
+            paths = write_triage_report_outputs(args.out, sample_id, report)
+            s = report.get("summary_iocs") or {}
+            print(f"  sample: {sample_id}")
+            print(f"    status: {s.get('status')}")
+            print(f"    score: {s.get('score')}")
+            print(f"    target: {s.get('target')}")
+            print(f"    IOC markdown: {paths['md']}")
+            print(f"    raw JSON: {paths['json']}")
+        return 0
 
     gh = GitHubClient(token=keys.github_token)
 
@@ -484,6 +616,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 submit=bool(args.triage_submit),
                 max_urls_per_candidate=args.triage_max_urls,
                 submit_profile=args.triage_profile,
+                submit_on_lookup_error=bool(args.triage_submit_on_lookup_error),
             )
             triage_summary["status"] = "completed"
 

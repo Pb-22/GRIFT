@@ -17,9 +17,15 @@ class GitHubRateLimitError(RuntimeError):
 
 
 class GitHubClient:
-    def __init__(self, token: Optional[str] = None, user_agent: str = "github-seo-hunt/1.0"):
+    def __init__(
+        self,
+        token: Optional[str] = None,
+        user_agent: str = "github-seo-hunt/1.0",
+        opener: Optional[Any] = None,
+    ):
         self.token = token
         self.user_agent = user_agent
+        self.opener = opener or urllib.request.urlopen
         self._last_request = 0.0
 
     def _headers(self) -> dict[str, str]:
@@ -46,7 +52,7 @@ class GitHubClient:
             url = url + ("&" if "?" in url else "?") + urllib.parse.urlencode(params)
         req = urllib.request.Request(url, headers=self._headers())
         try:
-            with urllib.request.urlopen(req, timeout=45) as resp:
+            with self.opener(req, timeout=45) as resp:
                 body = resp.read().decode("utf-8", errors="replace")
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as e:
@@ -58,6 +64,21 @@ class GitHubClient:
                     f"GitHub rate limit for {url}: {err_body}", reset_epoch=reset_epoch
                 ) from e
             raise RuntimeError(f"GitHub HTTP {e.code} for {url}: {err_body}") from e
+
+    def validate_token(self) -> dict[str, Any]:
+        """Validate the configured GitHub token without returning the token."""
+        try:
+            data = self.get_json("https://api.github.com/rate_limit")
+            core = (data.get("resources") or {}).get("core") if isinstance(data, dict) else {}
+            return {
+                "ok": True,
+                "service": "github",
+                "status": "valid",
+                "limit": (core or {}).get("limit"),
+                "remaining": (core or {}).get("remaining"),
+            }
+        except Exception as e:
+            return {"ok": False, "service": "github", "status": "invalid", "error": str(e)}
 
     def search_repositories(
         self,

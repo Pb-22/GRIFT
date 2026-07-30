@@ -63,6 +63,11 @@ python grift.py --set-triage-key
 ```
 
 The values are hidden while typing, stored with file mode 600, ignored by git, and masked in console output.
+When a key is present, GRIFT validates it before the run and prints a clear success or failure message:
+
+- GitHub token validation uses the GitHub API rate-limit endpoint and reports remaining quota.
+- tria.ge key validation runs only when Stage 2 flags are requested and confirms access before lookup, submit, or report pull.
+- invalid required keys stop the run before any search or submission work starts.
 
 ## App inputs
 
@@ -85,17 +90,20 @@ python grift.py --import-apps input/apps.txt
 Input rules:
 
 - plain line: app name
-- quoted full product phrase plus acronym: ambiguous acronym product
+- multiword plain line: GRIFT derives an acronym and imports it as a full-name/acronym product alias
+- quoted full product phrase plus acronym: use this when you want to override or confirm the acronym
 - blank lines ignored
 - lines starting with `#` ignored
 
-For acronym products, use:
+Examples:
 
 ```text
+Audacity
+SQL Server Management Studio
 "SQL Server Management Studio" SSMS
 ```
 
-GRIFT treats the full phrase as target identity and the acronym as ambiguous. Acronym-only hits are weaker unless the full phrase or delivery behavior appears.
+The two SQL Server Management Studio lines both guide GRIFT to use the full product phrase for identity and `SSMS` as an ambiguous acronym. If GRIFT derives the wrong acronym for a product, use the quoted form with the correct acronym.
 
 ## `brands.yaml` format
 
@@ -136,6 +144,8 @@ Interactive:
 python grift.py --created-after 2026-07-01
 ```
 
+Before an interactive run, GRIFT prints the configured app list, derived product aliases, and derived queries. You can press Enter to continue, type `import /absolute/path/to/apps.txt` to add/change the list immediately, or type `edit` to stop and fix the list before running. The app list is validated before any GitHub search begins.
+
 All current targets with a stronger output directory name:
 
 ```bash
@@ -164,6 +174,8 @@ In cron mode, `GITHUB_TOKEN` is required and prompts are disabled.
 | `--set-github-token` | Prompt and store GitHub token in `.env` |
 | `--set-triage-key` | Prompt and store tria.ge key in `.env` |
 | `--import-apps input/apps.txt` | Import app seeds into `brands.yaml` |
+| `--validate-only` | Validate app list, arguments, and needed keys without running searches |
+| `--skip-app-review` | Skip the interactive app-list review prompt |
 | `--list-brands` | Show configured targets and derived queries |
 | `--brand Audacity` | Only run one target, repeatable |
 | `--created-after YYYY-MM-DD` | Add a GitHub created date filter |
@@ -218,6 +230,15 @@ Each run writes to the selected output directory:
 - `candidates_<timestamp>.csv`
 - `report_<timestamp>.md`
 - `report_latest.md`
+
+`report_latest.md` is the roll-up summary for the run: it lists all candidates meeting the configured score threshold, the reasons they scored, payload URL buckets, and Stage 2 tria.ge lookup/submission status when enabled.
+
+tria.ge report pulls write one IOC summary per sample:
+
+- `triage_report_<sample_id>.json`
+- `triage_report_<sample_id>.md`
+
+The tria.ge IOC Markdown is score-led. It lists high-scoring tasks first, then high-scoring files with hashes beside the filename for quick reference, and then repeats SHA256/SHA1/MD5 in separate bulk-copy blocks. It does not scrape random certificate/CRL/timestamp URLs from static metadata into the IOC list.
 
 Markdown reports are defanged by default. JSON and CSV preserve raw URLs for tooling.
 
