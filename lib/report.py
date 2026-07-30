@@ -97,10 +97,34 @@ def write_outputs(
         f"- Candidates scored: **{len(candidates)}**",
         f"- Min score in report filter: `{meta.get('min_score')}`",
         f"- Markdown URLs defanged: `{defang_markdown}`",
-        "",
-        "## Top candidates",
-        "",
     ]
+    triage_meta = meta.get("triage") if isinstance(meta.get("triage"), dict) else {}
+    if triage_meta:
+        lines.extend(
+            [
+                f"- tria.ge Stage 2: `{triage_meta.get('status')}`",
+                f"  - eligible candidates: `{triage_meta.get('eligible_candidates', 0)}`",
+                f"  - candidates with payload targets: `{triage_meta.get('candidates_considered', 0)}`",
+                f"  - candidates without payload targets: `{triage_meta.get('candidates_without_targets', 0)}`",
+                f"  - static/decorative targets skipped: `{triage_meta.get('static_targets_skipped', 0)}`",
+                f"  - targets considered: `{triage_meta.get('targets_considered', 0)}`",
+                f"  - lookups attempted: `{triage_meta.get('lookups_attempted', 0)}`",
+                f"  - duplicate target lookups reused: `{triage_meta.get('duplicate_targets_reused', 0)}`",
+                f"  - lookup matches: `{triage_meta.get('lookup_matches', 0)}`",
+                f"  - errors: `{triage_meta.get('errors', 0)}`",
+            ]
+        )
+    elif meta.get("triage_lookup_requested") or meta.get("triage_submit_requested"):
+        lines.append(f"- tria.ge Stage 2: `{meta.get('triage_stage2_status') or 'requested_no_summary'}`")
+    else:
+        lines.append("- tria.ge Stage 2: `not requested`")
+    lines.extend(
+        [
+            "",
+            "## Top candidates",
+            "",
+        ]
+    )
     ranked = sorted(
         candidates,
         key=lambda x: (x.get("score_result") or {}).get("score") or 0,

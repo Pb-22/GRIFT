@@ -137,15 +137,77 @@ class TriageStage2Tests(unittest.TestCase):
                 "score_result": {"score": 9, "download_urls": {"payload": ["https://err.example/a.zip"]}},
             },
         ]
+        events = []
 
-        summary = enrich_candidates_with_triage(candidates, client, min_score=8, submit=False)
+        summary = enrich_candidates_with_triage(candidates, client, min_score=8, submit=False, progress=events.append)
 
+        self.assertEqual(summary["eligible_candidates"], 2)
         self.assertEqual(summary["candidates_considered"], 2)
+        self.assertEqual(summary["targets_considered"], 2)
         self.assertEqual(summary["lookups_attempted"], 2)
         self.assertEqual(summary["errors"], 1)
         self.assertIn("triage", candidates[0])
         self.assertNotIn("triage", candidates[1])
         self.assertFalse(candidates[2]["triage"]["lookups"][0]["ok"])
+        self.assertEqual([e["event"] for e in events], ["start", "lookup_start", "lookup_done", "lookup_start", "lookup_done", "done"])
+        self.assertEqual(events[1]["index"], 1)
+        self.assertEqual(events[1]["total"], 2)
+        self.assertEqual(events[-1]["summary"]["lookups_attempted"], 2)
+
+    def test_candidate_enrichment_reports_no_targets_when_stage2_has_nothing_to_query(self):
+        client = TriageClient("secret-key", opener=FakeOpener([]))
+        candidates = [
+            {"full_name": "owner/high", "score_result": {"score": 9, "download_urls": {}}},
+            {"full_name": "owner/low", "score_result": {"score": 3, "download_urls": {"payload": ["https://low.example/a.zip"]}}},
+        ]
+        events = []
+
+        summary = enrich_candidates_with_triage(candidates, client, min_score=8, progress=events.append)
+
+        self.assertEqual(summary["eligible_candidates"], 1)
+        self.assertEqual(summary["candidates_without_targets"], 1)
+        self.assertEqual(summary["targets_considered"], 0)
+        self.assertEqual(summary["lookups_attempted"], 0)
+        self.assertEqual(events[0]["event"], "start")
+        self.assertEqual(events[0]["total_targets"], 0)
+        self.assertEqual(events[-1]["event"], "done")
+
+    def test_candidate_enrichment_dedupes_urls_across_candidates_and_records_reuse(self):
+        opener = FakeOpener([FakeResponse(payload={"data": []})])
+        client = TriageClient("secret-key", opener=opener)
+        candidates = [
+            {"full_name": "owner/one", "score_result": {"score": 9, "download_urls": {"payload": ["https://same.example/a.zip"]}}},
+            {"full_name": "owner/two", "score_result": {"score": 9, "download_urls": {"payload": ["https://same.example/a.zip"]}}},
+        ]
+
+        summary = enrich_candidates_with_triage(candidates, client, min_score=8)
+
+        self.assertEqual(summary["targets_considered"], 2)
+        self.assertEqual(summary["lookups_attempted"], 1)
+        self.assertEqual(summary["duplicate_targets_reused"], 1)
+        self.assertEqual(len(opener.requests), 1)
+        self.assertEqual(candidates[1]["triage"]["lookups"][0]["deduped_from_cache"], True)
+
+    def test_candidate_enrichment_skips_static_image_urls_before_triage_lookup(self):
+        client = TriageClient("secret-key", opener=FakeOpener([]))
+        candidates = [
+            {
+                "full_name": "owner/static",
+                "score_result": {
+                    "score": 9,
+                    "download_urls": {
+                        "unknown_external": ["https://encrypted-tbn0.gstatic.com/images?q=abc", "https://example.com/logo.png"]
+                    },
+                },
+            },
+        ]
+
+        summary = enrich_candidates_with_triage(candidates, client, min_score=8)
+
+        self.assertEqual(summary["eligible_candidates"], 1)
+        self.assertEqual(summary["candidates_without_targets"], 1)
+        self.assertEqual(summary["targets_considered"], 0)
+        self.assertEqual(summary["static_targets_skipped"], 2)
 
     def test_submit_mode_skips_existing_matches_and_lookup_errors_by_default(self):
         opener = FakeOpener([

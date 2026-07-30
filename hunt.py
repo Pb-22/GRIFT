@@ -378,6 +378,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--triage-min-score", type=int, default=8)
     p.add_argument("--triage-max-urls", type=int, default=3, help="Stage 2: max payload URLs per candidate")
     p.add_argument("--triage-profile", default="default", help="Stage 2: tria.ge analysis profile for URL submissions")
+    p.add_argument("--triage-timeout", type=float, default=10.0, help="Stage 2: seconds to wait for each tria.ge API request")
     p.add_argument("--triage-submit-on-lookup-error", action="store_true", help="Stage 2: submit even when lookup times out/fails; still requires submit safety flag")
     p.add_argument("--triage-report", action="append", dest="triage_reports", help="Stage 2: pull and summarize an existing tria.ge sample id")
     p.add_argument("--i-understand-this-submits-malware", action="store_true")
@@ -607,8 +608,54 @@ def main(argv: Optional[list[str]] = None) -> int:
             triage_summary = {"enabled": False, "status": "missing_key"}
             print("  tria.ge: key not provided; Stage 2 skipped")
         else:
-            print("  tria.ge: running Stage 2 lookup" + (" + submit" if args.triage_submit else ""))
-            triage_client = TriageClient(keys.triage_key)
+            print("  tria.ge: running Stage 2 lookup" + (" + submit" if args.triage_submit else ""), flush=True)
+
+            def show_triage_progress(event: dict[str, Any]) -> None:
+                kind = event.get("event")
+                if kind == "start":
+                    print(
+                        "  tria.ge Stage 2 plan: "
+                        f"eligible={event.get('eligible_candidates', 0)}, "
+                        f"with_urls={event.get('candidates_considered', 0)}, "
+                        f"without_urls={event.get('candidates_without_targets', 0)}, "
+                        f"url_lookups={event.get('total_targets', 0)}, "
+                        f"static_skipped={event.get('static_targets_skipped', 0)}",
+                        flush=True,
+                    )
+                elif kind == "lookup_start":
+                    print(
+                        f"  tria.ge lookup {event.get('index')}/{event.get('total')}: "
+                        f"{event.get('candidate')} -> {event.get('url')}",
+                        flush=True,
+                    )
+                elif kind == "lookup_done":
+                    status = "ok" if event.get("ok") else "error"
+                    detail = f"matches={event.get('matches', 0)}"
+                    if event.get("error"):
+                        detail = f"error={event.get('error')}"
+                    print(
+                        f"  tria.ge lookup {event.get('index')}/{event.get('total')} {status}: "
+                        f"status={event.get('status')} {detail}",
+                        flush=True,
+                    )
+                elif kind == "submit_start":
+                    print(f"  tria.ge submit: {event.get('candidate')} -> {event.get('url')}", flush=True)
+                elif kind == "submit_done":
+                    status = "ok" if event.get("ok") else "error"
+                    sample = event.get("sample_id") or event.get("error") or "unknown"
+                    print(f"  tria.ge submit {status}: status={event.get('status')} sample={sample}", flush=True)
+                elif kind == "done":
+                    s = event.get("summary") or {}
+                    print(
+                        "  tria.ge Stage 2 done: "
+                        f"lookups={s.get('lookups_attempted', 0)}, "
+                        f"deduped={s.get('duplicate_targets_reused', 0)}, "
+                        f"matches={s.get('lookup_matches', 0)}, "
+                        f"errors={s.get('errors', 0)}",
+                        flush=True,
+                    )
+
+            triage_client = TriageClient(keys.triage_key, timeout=args.triage_timeout)
             triage_summary = enrich_candidates_with_triage(
                 candidates,
                 triage_client,
@@ -617,6 +664,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 max_urls_per_candidate=args.triage_max_urls,
                 submit_profile=args.triage_profile,
                 submit_on_lookup_error=bool(args.triage_submit_on_lookup_error),
+                progress=show_triage_progress,
             )
             triage_summary["status"] = "completed"
 

@@ -1,10 +1,11 @@
 brands:
 - name: SSMS
+  products:
+  - '"SQL Server Management Studio" SSMS'
   queries:
   - SSMS in:name
   - '"SQL Server Management Studio" download'
-  products:
-  - '"SQL Server Management Studio" SSMS'
+  - SSMS download
   official_orgs:
   - microsoft
   - MicrosoftDocs
@@ -34,6 +35,7 @@ brands:
   - Audacity download windows
   - Audacity Windows Download
   - Audacity-Windows-Download in:name
+  - Audacity in:name
   official_orgs:
   - audacity
   official_domains:
@@ -41,13 +43,151 @@ brands:
   - support.audacityteam.org
   - github.com/audacity/audacity
   notes: OkoBot carrier brand; high SEO free-software surface
+- name: DeepSeek
+  queries:
+  - DeepSeek download windows
+  - DeepSeek Windows Download
+  - DeepSeek in:name
+  notes: AI app lure surface
+- name: UltraViewer
+  queries:
+  - UltraViewer download windows
+  - UltraViewer Windows Download
+  - UltraViewer in:name
+  notes: Remote access app lure surface
+- name: AutoCAD
+  queries:
+  - AutoCAD download windows
+  - AutoCAD Windows Download
+  - AutoCAD in:name
+  official_orgs:
+  - Autodesk
+  notes: Commercial design software lure surface
+- name: SketchUp
+  queries:
+  - SketchUp download windows
+  - SketchUp Windows Download
+  - SketchUp in:name
+  notes: Design software lure surface
+- name: Ableton
+  queries:
+  - Ableton download windows
+  - Ableton Windows Download
+  - Ableton in:name
+  notes: Music production software lure surface
+- name: Quicken
+  queries:
+  - Quicken download windows
+  - Quicken Windows Download
+  - Quicken in:name
+  notes: Finance software lure surface
+- name: AnyDesk
+  queries:
+  - AnyDesk download windows
+  - AnyDesk Windows Download
+  - AnyDesk in:name
+  notes: Remote access app lure surface
 - name: TeamViewer
   queries:
   - TeamViewer Activator
   - TeamViewer download windows
+  - TeamViewer Windows Download
+  - TeamViewer in:name
   official_orgs:
   - teamviewer
   notes: Crack/activator SEO often shares kit with other brand lures
+- name: VLC
+  queries:
+  - VLC download windows
+  - VLC Windows Download
+  - VLC in:name
+  official_orgs:
+  - videolan
+  notes: Popular free utility lure surface
+- name: 7-Zip
+  queries:
+  - 7-Zip download windows
+  - 7-Zip Windows Download
+  - 7-Zip in:name
+  - 7zip download windows
+  notes: Popular archive utility lure surface
+- name: WinRAR
+  queries:
+  - WinRAR download windows
+  - WinRAR Windows Download
+  - WinRAR in:name
+  notes: Popular archive utility lure surface
+- name: Notepad++
+  queries:
+  - Notepad++ download windows
+  - Notepad++ Windows Download
+  - Notepad++ in:name
+  notes: Popular editor lure surface
+- name: FileZilla
+  queries:
+  - FileZilla download windows
+  - FileZilla Windows Download
+  - FileZilla in:name
+  notes: Admin/file transfer utility lure surface
+- name: PuTTY
+  queries:
+  - PuTTY download windows
+  - PuTTY Windows Download
+  - PuTTY in:name
+  notes: Admin/SSH utility lure surface
+- name: OBS Studio
+  queries:
+  - OBS Studio download windows
+  - OBS Studio Windows Download
+  - OBS Studio in:name
+  official_orgs:
+  - obsproject
+  notes: Popular recording/streaming utility lure surface
+- name: GIMP
+  queries:
+  - GIMP download windows
+  - GIMP Windows Download
+  - GIMP in:name
+  notes: Popular free graphics utility lure surface
+- name: Blender
+  queries:
+  - Blender download windows
+  - Blender Windows Download
+  - Blender in:name
+  notes: Popular 3D/design utility lure surface
+- name: qBittorrent
+  queries:
+  - qBittorrent download windows
+  - qBittorrent Windows Download
+  - qBittorrent in:name
+  notes: Popular downloader utility lure surface
+- name: LibreOffice
+  queries:
+  - LibreOffice download windows
+  - LibreOffice Windows Download
+  - LibreOffice in:name
+  notes: Popular office suite lure surface
+- name: PDF converter
+  queries:
+  - '"PDF converter" download'
+  - PDF converter windows
+  - PDF converter in:name
+  notes: Generic SEO conversion lure theme; keep exact phrase to avoid broad acronym
+    noise
+- name: PDF editor
+  queries:
+  - '"PDF editor" download'
+  - PDF editor windows
+  - PDF editor in:name
+  notes: Generic SEO PDF editing lure theme; keep exact phrase to avoid broad acronym
+    noise
+- name: PDF to Word converter
+  queries:
+  - '"PDF to Word converter" download'
+  - PDF to Word converter windows
+  - PDF to Word converter in:name
+  notes: Generic SEO conversion lure theme; keep exact phrase to avoid broad acronym
+    noise
 defaults:
   min_score_report: 4
   per_query_results: 20

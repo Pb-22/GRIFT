@@ -1,8 +1,29 @@
 # Example GRIFT app seed list.
-# One app per line.
+# One app or lure theme per line.
 # Plain app names generate generic fake download searches.
 # Quoted full product name plus acronym helps GRIFT resolve ambiguous acronym hits.
 
 Audacity
-TeamViewer
 "SQL Server Management Studio" SSMS
+DeepSeek
+UltraViewer
+AutoCAD
+SketchUp
+Ableton
+Quicken
+AnyDesk
+TeamViewer
+VLC
+7-Zip
+WinRAR
+Notepad++
+FileZilla
+PuTTY
+OBS Studio
+GIMP
+Blender
+qBittorrent
+LibreOffice
+PDF converter
+PDF editor
+PDF to Word converter

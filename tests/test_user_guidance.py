@@ -8,6 +8,7 @@ from unittest.mock import patch
 from hunt import import_apps_file, review_configured_brands
 from lib.brands import add_brand, load_brands, validate_brands
 from lib.github_client import GitHubClient
+from lib.report import write_outputs
 from lib.triage import write_triage_report_outputs
 
 
@@ -115,6 +116,39 @@ class UserGuidanceTests(unittest.TestCase):
 
             self.assertIn("`Install.exe` — sha256 `" + "b" * 64 + "`", text)
             self.assertIn("### SHA256\n- `" + "a" * 64 + "`\n- `" + "b" * 64 + "`", text)
+    def test_markdown_report_always_states_stage2_status_summary(self):
+        with tempfile.TemporaryDirectory() as d:
+            paths = write_outputs(
+                Path(d),
+                candidates=[],
+                meta={
+                    "generated_at": "2026-07-30T00:00:00Z",
+                    "created_after": "2026-07-01",
+                    "brands": ["Audacity"],
+                    "min_score": 4,
+                    "triage_lookup_requested": True,
+                    "triage_stage2_status": "completed",
+                    "triage": {
+                        "status": "completed",
+                        "eligible_candidates": 2,
+                        "candidates_considered": 1,
+                        "candidates_without_targets": 1,
+                        "static_targets_skipped": 2,
+                        "targets_considered": 3,
+                        "lookups_attempted": 3,
+                        "duplicate_targets_reused": 1,
+                        "lookup_matches": 0,
+                        "errors": 0,
+                    },
+                },
+            )
+
+            text = paths["md_latest"].read_text(encoding="utf-8")
+            self.assertIn("- tria.ge Stage 2: `completed`", text)
+            self.assertIn("eligible candidates: `2`", text)
+            self.assertIn("lookups attempted: `3`", text)
+            self.assertIn("static/decorative targets skipped: `2`", text)
+            self.assertIn("duplicate target lookups reused: `1`", text)
 
 
 if __name__ == "__main__":

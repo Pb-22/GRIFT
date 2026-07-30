@@ -67,7 +67,37 @@ def collect_candidate_targets(candidate: dict[str, Any], *, limit: int = 8) -> l
     ]
 
 
+_STATIC_URL_EXTENSIONS = {
+    ".bmp",
+    ".gif",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".svg",
+    ".webp",
+}
+_STATIC_URL_HOSTS = {
+    "encrypted-tbn0.gstatic.com",
+    "encrypted-tbn1.gstatic.com",
+    "encrypted-tbn2.gstatic.com",
+    "encrypted-tbn3.gstatic.com",
+    "gstatic.com",
+}
+
+
+def is_static_or_decorative_url(url: str) -> bool:
+    """Return True for image/static URLs that are not useful tria.ge lookup targets."""
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.netloc.lower().split(":")[0]
+    path = parsed.path.lower()
+    if host in _STATIC_URL_HOSTS or host.endswith(".gstatic.com"):
+        return True
+    return any(path.endswith(ext) for ext in _STATIC_URL_EXTENSIONS)
+
+
 class TriageClient:
+
     """Small urllib based tria.ge API client.
 
     The request transport is injectable for tests. Results never include the API
@@ -268,49 +298,152 @@ def enrich_candidates_with_triage(
     max_urls_per_candidate: int = 3,
     submit_profile: str = "default",
     submit_on_lookup_error: bool = False,
+    progress: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> dict[str, Any]:
     """Attach tria.ge lookup/submit results to candidates above a score threshold."""
     summary = {
         "enabled": True,
         "min_score": min_score,
         "submit": bool(submit),
+        "eligible_candidates": 0,
         "candidates_considered": 0,
+        "candidates_without_targets": 0,
+        "static_targets_skipped": 0,
+        "targets_considered": 0,
+        "duplicate_targets_reused": 0,
         "lookups_attempted": 0,
         "submits_attempted": 0,
         "lookup_matches": 0,
         "errors": 0,
     }
+    planned: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     for candidate in candidates:
         score_result = candidate.get("score_result") or {}
         if score_result.get("drop"):
             continue
         if (score_result.get("score") or 0) < min_score:
             continue
+        summary["eligible_candidates"] += 1
         targets = collect_candidate_targets(candidate, limit=max_urls_per_candidate)
+        filtered_targets = []
+        for target in targets:
+            if is_static_or_decorative_url(str(target.get("url") or "")):
+                summary["static_targets_skipped"] += 1
+                continue
+            filtered_targets.append(target)
+        targets = filtered_targets
         if not targets:
+            summary["candidates_without_targets"] += 1
             continue
+        planned.append((candidate, targets))
         summary["candidates_considered"] += 1
+        summary["targets_considered"] += len(targets)
+
+    if progress:
+        progress(
+            {
+                "event": "start",
+                "eligible_candidates": summary["eligible_candidates"],
+                "candidates_considered": summary["candidates_considered"],
+                "candidates_without_targets": summary["candidates_without_targets"],
+                "static_targets_skipped": summary["static_targets_skipped"],
+                "total_targets": summary["targets_considered"],
+                "submit": bool(submit),
+            }
+        )
+
+    index = 0
+    lookup_cache: dict[str, dict[str, Any]] = {}
+    for candidate, targets in planned:
         triage_block = candidate.setdefault("triage", {"lookups": [], "submissions": []})
         for target in targets:
+            index += 1
             url = target["url"]
             passwords = target.get("passwords") or []
             password = passwords[0] if passwords else None
-            lookup = client.lookup_url(url, passwords=passwords)
-            triage_block["lookups"].append(lookup)
-            summary["lookups_attempted"] += 1
-            summary["lookup_matches"] += int(lookup.get("matches") or 0)
-            if not lookup.get("ok"):
-                summary["errors"] += 1
+            if progress:
+                progress(
+                    {
+                        "event": "lookup_start",
+                        "index": index,
+                        "total": summary["targets_considered"],
+                        "candidate": candidate.get("full_name"),
+                        "url": url,
+                    }
+                )
+            if url in lookup_cache:
+                lookup = dict(lookup_cache[url])
+                lookup["deduped_from_cache"] = True
+                if passwords:
+                    lookup["passwords"] = passwords
+                triage_block["lookups"].append(lookup)
+                summary["duplicate_targets_reused"] += 1
+                if progress:
+                    progress(
+                        {
+                            "event": "lookup_done",
+                            "index": index,
+                            "total": summary["targets_considered"],
+                            "candidate": candidate.get("full_name"),
+                            "url": url,
+                            "ok": bool(lookup.get("ok")),
+                            "status": lookup.get("status"),
+                            "matches": int(lookup.get("matches") or 0),
+                            "deduped_from_cache": True,
+                        }
+                    )
+            else:
+                lookup = client.lookup_url(url, passwords=passwords)
+                lookup_cache[url] = dict(lookup)
+                triage_block["lookups"].append(lookup)
+                summary["lookups_attempted"] += 1
+                summary["lookup_matches"] += int(lookup.get("matches") or 0)
+                if not lookup.get("ok"):
+                    summary["errors"] += 1
+                if progress:
+                    progress(
+                        {
+                            "event": "lookup_done",
+                            "index": index,
+                            "total": summary["targets_considered"],
+                            "candidate": candidate.get("full_name"),
+                            "url": url,
+                            "ok": bool(lookup.get("ok")),
+                            "status": lookup.get("status"),
+                            "matches": int(lookup.get("matches") or 0),
+                            "error": lookup.get("error"),
+                        }
+                    )
             if submit:
                 should_submit = bool(lookup.get("ok") and int(lookup.get("matches") or 0) == 0)
                 if not lookup.get("ok") and submit_on_lookup_error:
                     should_submit = True
                 if should_submit:
+                    if progress:
+                        progress(
+                            {
+                                "event": "submit_start",
+                                "candidate": candidate.get("full_name"),
+                                "url": url,
+                            }
+                        )
                     submitted = client.submit_url(url, password=password, profile=submit_profile)
                     triage_block["submissions"].append(submitted)
                     summary["submits_attempted"] += 1
                     if not submitted.get("ok"):
                         summary["errors"] += 1
+                    if progress:
+                        progress(
+                            {
+                                "event": "submit_done",
+                                "candidate": candidate.get("full_name"),
+                                "url": url,
+                                "ok": bool(submitted.get("ok")),
+                                "status": submitted.get("status"),
+                                "sample_id": submitted.get("sample_id"),
+                                "error": submitted.get("error"),
+                            }
+                        )
                 else:
                     triage_block["submissions"].append(
                         {
@@ -321,6 +454,8 @@ def enrich_candidates_with_triage(
                             "reason": "existing_match_or_lookup_error",
                         }
                     )
+    if progress:
+        progress({"event": "done", "summary": dict(summary)})
     return summary
 
 
