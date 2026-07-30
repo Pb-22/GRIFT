@@ -146,8 +146,8 @@ def add_brand(
     data = load_brands(path)
     brands = data.setdefault("brands", [])
     alias = parse_product_line(name)
-    stored_name = alias.get("acronym") or alias.get("full") or name
     product_seed = f'"{alias["full"]}" {alias["acronym"]}' if alias.get("full") and alias.get("acronym") else ""
+    stored_name = str(alias.get("acronym") if (not queries and alias.get("acronym")) else (alias.get("full") or name))
     if not queries:
         if product_seed:
             products = list(products or [])

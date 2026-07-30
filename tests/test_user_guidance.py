@@ -13,13 +13,13 @@ from lib.triage import write_triage_report_outputs
 
 
 class UserGuidanceTests(unittest.TestCase):
-    def test_import_multiword_app_generates_acronym_alias_and_queries(self):
+    def test_import_explicit_multiword_alias_generates_acronym_alias_and_queries(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             brands = root / "brands.yaml"
             brands.write_text("brands: []\n", encoding="utf-8")
             apps = root / "apps.txt"
-            apps.write_text("SQL Server Management Studio\n", encoding="utf-8")
+            apps.write_text('"SQL Server Management Studio" SSMS\n', encoding="utf-8")
 
             imported = import_apps_file(apps, brands)
             data = load_brands(brands)
@@ -31,6 +31,25 @@ class UserGuidanceTests(unittest.TestCase):
             self.assertIn("SSMS download", entry["queries"])
             self.assertIn("SSMS in:name", entry["queries"])
             self.assertTrue(entry["ambiguous_brand"])
+
+    def test_import_plain_multiword_app_does_not_invent_acronym_alias(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            brands = root / "brands.yaml"
+            brands.write_text("brands: []\n", encoding="utf-8")
+            apps = root / "apps.txt"
+            apps.write_text("PDF converter\nOBS Studio\n", encoding="utf-8")
+
+            import_apps_file(apps, brands)
+            data = load_brands(brands)
+            by_name = {b["name"]: b for b in data["brands"]}
+
+            self.assertIn("PDF converter", by_name)
+            self.assertIn("OBS Studio", by_name)
+            self.assertNotIn("PC", by_name)
+            self.assertNotIn("OS", by_name)
+            self.assertNotIn("PC download", by_name["PDF converter"]["queries"])
+            self.assertNotIn("OS download", by_name["OBS Studio"]["queries"])
 
     def test_validate_brands_reports_invalid_entries_before_run(self):
         data = {
@@ -53,7 +72,7 @@ class UserGuidanceTests(unittest.TestCase):
             brands = root / "brands.yaml"
             brands.write_text("brands:\n- name: Audacity\n  queries:\n  - Audacity download windows\n", encoding="utf-8")
             apps = root / "apps.txt"
-            apps.write_text("SQL Server Management Studio\n", encoding="utf-8")
+            apps.write_text('"SQL Server Management Studio" SSMS\n', encoding="utf-8")
             out = io.StringIO()
 
             with patch("hunt.prompt_with_timeout", return_value=f"import {apps}"), redirect_stdout(out):

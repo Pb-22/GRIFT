@@ -58,7 +58,8 @@ def import_apps_file(path: Path, brands_path: Path) -> list[dict[str, Any]]:
         if not line or line.startswith("#"):
             continue
         alias = parse_product_line(line)
-        if alias.get("acronym"):
+        explicit_alias = line.startswith(('"', "'")) and bool(alias.get("acronym"))
+        if explicit_alias:
             full = alias.get("full") or line
             acronym = alias["acronym"]
             seed = f'"{full}" {acronym}'
@@ -71,7 +72,7 @@ def import_apps_file(path: Path, brands_path: Path) -> list[dict[str, Any]]:
                 notes="imported from apps file",
             )
         else:
-            name = alias.get("full") or line
+            name = line
             queries = [
                 f"{name} download windows",
                 f"{name} Windows Download",
