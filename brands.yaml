@@ -1,0 +1,53 @@
+brands:
+- name: SSMS
+  queries:
+  - SSMS in:name
+  - '"SQL Server Management Studio" download'
+  products:
+  - '"SQL Server Management Studio" SSMS'
+  official_orgs:
+  - microsoft
+  - MicrosoftDocs
+  ambiguous_brand: true
+  target_context_terms:
+  - sql server management studio
+  - microsoft sql server
+  - mssql
+  - sqlserver
+  - installer
+  - setup
+  - download
+  wrong_product_terms:
+  - school management
+  - student management
+  - supply chain
+  - dev ops
+  - dev-ops
+  - color theme
+  - streamdeck
+  - embedded systems
+  - checkout alert
+  - management system
+  notes: OkoBot advertised SSMS; acronym collides with School Management System
+- name: Audacity
+  queries:
+  - Audacity download windows
+  - Audacity Windows Download
+  - Audacity-Windows-Download in:name
+  official_orgs:
+  - audacity
+  official_domains:
+  - audacityteam.org
+  - support.audacityteam.org
+  - github.com/audacity/audacity
+  notes: OkoBot carrier brand; high SEO free-software surface
+- name: TeamViewer
+  queries:
+  - TeamViewer Activator
+  - TeamViewer download windows
+  official_orgs:
+  - teamviewer
+  notes: Crack/activator SEO often shares kit with other brand lures
+defaults:
+  min_score_report: 4
+  per_query_results: 20

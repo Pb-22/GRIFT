@@ -1,0 +1,8 @@
+# Example GRIFT app seed list.
+# One app per line.
+# Plain app names generate generic fake download searches.
+# Quoted full product name plus acronym helps GRIFT resolve ambiguous acronym hits.
+
+Audacity
+TeamViewer
+"SQL Server Management Studio" SSMS
