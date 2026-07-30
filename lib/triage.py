@@ -82,7 +82,15 @@ _STATIC_URL_HOSTS = {
     "encrypted-tbn1.gstatic.com",
     "encrypted-tbn2.gstatic.com",
     "encrypted-tbn3.gstatic.com",
+    "github-readme-activity-graph.vercel.app",
     "gstatic.com",
+    "i.postimg.cc",
+    "imagedelivery.net",
+    "postimg.cc",
+    "streak-stats.demolab.com",
+    "www.youtube.com",
+    "youtube.com",
+    "youtu.be",
 }
 
 
@@ -311,6 +319,7 @@ def enrich_candidates_with_triage(
         "static_targets_skipped": 0,
         "targets_considered": 0,
         "duplicate_targets_reused": 0,
+        "duplicate_submissions_reused": 0,
         "lookups_attempted": 0,
         "submits_attempted": 0,
         "lookup_matches": 0,
@@ -354,6 +363,7 @@ def enrich_candidates_with_triage(
 
     index = 0
     lookup_cache: dict[str, dict[str, Any]] = {}
+    submission_cache: dict[tuple[str, Optional[str]], dict[str, Any]] = {}
     for candidate, targets in planned:
         triage_block = candidate.setdefault("triage", {"lookups": [], "submissions": []})
         for target in targets:
@@ -415,10 +425,29 @@ def enrich_candidates_with_triage(
                         }
                     )
             if submit:
+                submit_key = (url, password)
                 should_submit = bool(lookup.get("ok") and int(lookup.get("matches") or 0) == 0)
                 if not lookup.get("ok") and submit_on_lookup_error:
                     should_submit = True
-                if should_submit:
+                if should_submit and submit_key in submission_cache:
+                    submitted = dict(submission_cache[submit_key])
+                    submitted["deduped_from_cache"] = True
+                    triage_block["submissions"].append(submitted)
+                    summary["duplicate_submissions_reused"] += 1
+                    if progress:
+                        progress(
+                            {
+                                "event": "submit_done",
+                                "candidate": candidate.get("full_name"),
+                                "url": url,
+                                "ok": bool(submitted.get("ok")),
+                                "status": submitted.get("status"),
+                                "sample_id": submitted.get("sample_id"),
+                                "error": submitted.get("error"),
+                                "deduped_from_cache": True,
+                            }
+                        )
+                elif should_submit:
                     if progress:
                         progress(
                             {
@@ -428,6 +457,7 @@ def enrich_candidates_with_triage(
                             }
                         )
                     submitted = client.submit_url(url, password=password, profile=submit_profile)
+                    submission_cache[submit_key] = dict(submitted)
                     triage_block["submissions"].append(submitted)
                     summary["submits_attempted"] += 1
                     if not submitted.get("ok"):

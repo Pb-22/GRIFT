@@ -110,6 +110,8 @@ def write_outputs(
                 f"  - targets considered: `{triage_meta.get('targets_considered', 0)}`",
                 f"  - lookups attempted: `{triage_meta.get('lookups_attempted', 0)}`",
                 f"  - duplicate target lookups reused: `{triage_meta.get('duplicate_targets_reused', 0)}`",
+                f"  - submissions attempted: `{triage_meta.get('submits_attempted', 0)}`",
+                f"  - duplicate submissions reused: `{triage_meta.get('duplicate_submissions_reused', 0)}`",
                 f"  - lookup matches: `{triage_meta.get('lookup_matches', 0)}`",
                 f"  - errors: `{triage_meta.get('errors', 0)}`",
             ]

@@ -700,8 +700,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"  tria.ge Stage 2: {triage_summary.get('status')}")
         print(f"    candidates considered: {triage_summary.get('candidates_considered', 0)}")
         print(f"    lookups attempted: {triage_summary.get('lookups_attempted', 0)}")
+        print(f"    duplicate lookups reused: {triage_summary.get('duplicate_targets_reused', 0)}")
         if triage_summary.get("submit"):
             print(f"    submissions attempted: {triage_summary.get('submits_attempted', 0)}")
+            print(f"    duplicate submissions reused: {triage_summary.get('duplicate_submissions_reused', 0)}")
         print(f"    lookup matches: {triage_summary.get('lookup_matches', 0)}")
         print(f"    errors: {triage_summary.get('errors', 0)}")
     if meta.get("errors"):

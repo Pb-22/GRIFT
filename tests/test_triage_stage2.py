@@ -188,6 +188,34 @@ class TriageStage2Tests(unittest.TestCase):
         self.assertEqual(len(opener.requests), 1)
         self.assertEqual(candidates[1]["triage"]["lookups"][0]["deduped_from_cache"], True)
 
+    def test_submit_mode_reuses_duplicate_url_submission_results(self):
+        opener = FakeOpener([
+            HTTPError("https://tria.ge/api/v0/search", 504, "timeout", {}, None),
+            FakeResponse(status=201, payload={"id": "submitted-1"}),
+        ])
+        client = TriageClient("secret-key", opener=opener)
+        candidates = [
+            {"full_name": "owner/one", "score_result": {"score": 9, "download_urls": {"payload": ["https://same.example/a.zip"]}}},
+            {"full_name": "owner/two", "score_result": {"score": 9, "download_urls": {"payload": ["https://same.example/a.zip"]}}},
+        ]
+
+        summary = enrich_candidates_with_triage(
+            candidates,
+            client,
+            min_score=8,
+            submit=True,
+            submit_on_lookup_error=True,
+        )
+
+        self.assertEqual(summary["lookups_attempted"], 1)
+        self.assertEqual(summary["duplicate_targets_reused"], 1)
+        self.assertEqual(summary["submits_attempted"], 1)
+        self.assertEqual(summary["duplicate_submissions_reused"], 1)
+        self.assertEqual(len(opener.requests), 2)
+        self.assertEqual(candidates[0]["triage"]["submissions"][0]["sample_id"], "submitted-1")
+        self.assertEqual(candidates[1]["triage"]["submissions"][0]["deduped_from_cache"], True)
+        self.assertEqual(candidates[1]["triage"]["submissions"][0]["sample_id"], "submitted-1")
+
     def test_candidate_enrichment_skips_static_image_urls_before_triage_lookup(self):
         client = TriageClient("secret-key", opener=FakeOpener([]))
         candidates = [
@@ -200,14 +228,28 @@ class TriageStage2Tests(unittest.TestCase):
                     },
                 },
             },
+            {
+                "full_name": "owner/decorative",
+                "score_result": {
+                    "score": 9,
+                    "download_urls": {
+                        "unknown_external": [
+                            "https://imagedelivery.net/account/image/public",
+                            "https://i.postimg.cc/abc/badge",
+                            "https://github-readme-activity-graph.vercel.app/graph?username=owner",
+                            "https://www.youtube.com/watch?v=example",
+                        ]
+                    },
+                },
+            },
         ]
 
-        summary = enrich_candidates_with_triage(candidates, client, min_score=8)
+        summary = enrich_candidates_with_triage(candidates, client, min_score=8, max_urls_per_candidate=8)
 
-        self.assertEqual(summary["eligible_candidates"], 1)
-        self.assertEqual(summary["candidates_without_targets"], 1)
+        self.assertEqual(summary["eligible_candidates"], 2)
+        self.assertEqual(summary["candidates_without_targets"], 2)
         self.assertEqual(summary["targets_considered"], 0)
-        self.assertEqual(summary["static_targets_skipped"], 2)
+        self.assertEqual(summary["static_targets_skipped"], 6)
 
     def test_submit_mode_skips_existing_matches_and_lookup_errors_by_default(self):
         opener = FakeOpener([

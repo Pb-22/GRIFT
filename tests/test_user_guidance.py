@@ -156,6 +156,8 @@ class UserGuidanceTests(unittest.TestCase):
                         "targets_considered": 3,
                         "lookups_attempted": 3,
                         "duplicate_targets_reused": 1,
+                        "submits_attempted": 2,
+                        "duplicate_submissions_reused": 1,
                         "lookup_matches": 0,
                         "errors": 0,
                     },
@@ -168,6 +170,8 @@ class UserGuidanceTests(unittest.TestCase):
             self.assertIn("lookups attempted: `3`", text)
             self.assertIn("static/decorative targets skipped: `2`", text)
             self.assertIn("duplicate target lookups reused: `1`", text)
+            self.assertIn("submissions attempted: `2`", text)
+            self.assertIn("duplicate submissions reused: `1`", text)
 
 
 if __name__ == "__main__":
