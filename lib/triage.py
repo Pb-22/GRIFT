@@ -48,6 +48,16 @@ def collect_candidate_urls(candidate: dict[str, Any], *, limit: int = 8) -> list
     return out
 
 
+def collect_candidate_targets(candidate: dict[str, Any], *, limit: int = 8) -> list[dict[str, Any]]:
+    """Return candidate payload URLs with archive password context."""
+    score_result = candidate.get("score_result") or {}
+    passwords = [str(p).strip() for p in (score_result.get("passwords") or []) if str(p).strip()]
+    return [
+        {"url": url, "passwords": passwords}
+        for url in collect_candidate_urls(candidate, limit=limit)
+    ]
+
+
 class TriageClient:
     """Small urllib based tria.ge API client.
 
@@ -116,8 +126,9 @@ class TriageClient:
         except Exception as e:
             return {"ok": False, "status": None, "error": f"{type(e).__name__}: {e}"}
 
-    def lookup_url(self, url: str) -> dict[str, Any]:
-        """Search existing tria.ge reports for a URL indicator."""
+    def lookup_url(self, url: str, *, passwords: Optional[list[str]] = None) -> dict[str, Any]:
+        """Search existing tria.ge reports for a URL indicator and retain password context."""
+        passwords = [p for p in (passwords or []) if p]
         query = f'url:"{url}"'
         response = self._request("GET", "/v0/search", query={"query": query})
         result: dict[str, Any] = {
@@ -127,6 +138,8 @@ class TriageClient:
             "status": response.get("status"),
             "query": query,
         }
+        if passwords:
+            result["passwords"] = passwords
         if response.get("ok"):
             payload = response.get("data") or {}
             data = payload.get("data") if isinstance(payload, dict) else None
@@ -140,24 +153,44 @@ class TriageClient:
                 result["details"] = response["data"]
         return result
 
-    def submit_url(self, url: str, *, profile: str = "default") -> dict[str, Any]:
-        """Submit a URL sample to tria.ge.
+    def submit_url(
+        self,
+        url: str,
+        *,
+        password: Optional[str] = None,
+        profile: str = "default",
+        timeout: int = 200,
+        network: str = "internet",
+        interactive: bool = False,
+    ) -> dict[str, Any]:
+        """Submit a remote URL fetch to tria.ge, including archive password if known.
 
-        This uses the documented API family for sample creation. The CLI only
-        calls it after `--triage-submit` and
-        `--i-understand-this-submits-malware` are both present.
+        Notes from the original research bundle used `kind=fetch`, archive
+        password, `interactive=false`, 200 second timeout, and internet network.
         """
+        body: dict[str, Any] = {
+            "kind": "fetch",
+            "url": url,
+            "profile": profile,
+            "timeout": timeout,
+            "network": network,
+            "interactive": interactive,
+        }
+        if password:
+            body["password"] = password
         response = self._request(
             "POST",
-            "/v0/samples/url",
-            body={"url": url, "profile": profile},
+            "/v0/samples",
+            body=body,
         )
         result: dict[str, Any] = {
             "url": url,
-            "mode": "submit_url",
+            "mode": "submit_fetch",
             "ok": bool(response.get("ok")),
             "status": response.get("status"),
         }
+        if password:
+            result["password"] = password
         payload = response.get("data") if isinstance(response.get("data"), dict) else {}
         if response.get("ok"):
             result["sample_id"] = payload.get("id") or payload.get("sample") or payload.get("task_id")
@@ -195,13 +228,16 @@ def enrich_candidates_with_triage(
             continue
         if (score_result.get("score") or 0) < min_score:
             continue
-        urls = collect_candidate_urls(candidate, limit=max_urls_per_candidate)
-        if not urls:
+        targets = collect_candidate_targets(candidate, limit=max_urls_per_candidate)
+        if not targets:
             continue
         summary["candidates_considered"] += 1
         triage_block = candidate.setdefault("triage", {"lookups": [], "submissions": []})
-        for url in urls:
-            lookup = client.lookup_url(url)
+        for target in targets:
+            url = target["url"]
+            passwords = target.get("passwords") or []
+            password = passwords[0] if passwords else None
+            lookup = client.lookup_url(url, passwords=passwords)
             triage_block["lookups"].append(lookup)
             summary["lookups_attempted"] += 1
             summary["lookup_matches"] += int(lookup.get("matches") or 0)
@@ -209,7 +245,7 @@ def enrich_candidates_with_triage(
                 summary["errors"] += 1
             if submit:
                 if lookup.get("ok") and int(lookup.get("matches") or 0) == 0:
-                    submitted = client.submit_url(url, profile=submit_profile)
+                    submitted = client.submit_url(url, password=password, profile=submit_profile)
                     triage_block["submissions"].append(submitted)
                     summary["submits_attempted"] += 1
                     if not submitted.get("ok"):

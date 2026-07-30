@@ -202,6 +202,8 @@ python grift.py --triage-submit --i-understand-this-submits-malware --triage-min
 Stage 2 behavior:
 
 - collects payload, GitHub Release, Telegram, Dropbox, and unknown external URLs from candidates
+- carries extracted archive passwords such as `github` or `2026` with each URL
+- submits remote samples as tria.ge `kind=fetch` URL jobs with archive password, `interactive=false`, `timeout=200`, and `network=internet`, matching the original research bundle notes
 - only considers candidates at or above `--triage-min-score`
 - stores lookup and submission results inside `candidates_*.json`
 - adds a compact tria.ge section to the Markdown report

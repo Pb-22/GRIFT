@@ -2,7 +2,12 @@ import json
 import unittest
 from urllib.error import HTTPError
 
-from lib.triage import TriageClient, collect_candidate_urls, enrich_candidates_with_triage
+from lib.triage import (
+    TriageClient,
+    collect_candidate_targets,
+    collect_candidate_urls,
+    enrich_candidates_with_triage,
+)
 
 
 class FakeResponse:
@@ -123,6 +128,51 @@ class TriageStage2Tests(unittest.TestCase):
         self.assertTrue(candidates[0]["triage"]["submissions"][0]["skipped"])
         self.assertTrue(candidates[1]["triage"]["submissions"][0]["skipped"])
         self.assertEqual(len(opener.requests), 2)
+    def test_collect_candidate_targets_pairs_urls_with_archive_passwords(self):
+        candidate = {
+            "score_result": {
+                "passwords": ["github"],
+                "download_urls": {
+                    "payload": ["https://payload.example/a.zip"],
+                    "unknown_external": ["https://other.example/"],
+                },
+            }
+        }
+
+        self.assertEqual(
+            collect_candidate_targets(candidate),
+            [
+                {"url": "https://payload.example/a.zip", "passwords": ["github"]},
+                {"url": "https://other.example/", "passwords": ["github"]},
+            ],
+        )
+
+    def test_lookup_records_archive_password_context_without_exposing_key(self):
+        opener = FakeOpener([FakeResponse(payload={"data": []})])
+        client = TriageClient("secret-key", opener=opener)
+
+        result = client.lookup_url("https://payload.example/a.zip", passwords=["github"])
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["passwords"], ["github"])
+        self.assertNotIn("secret-key", json.dumps(result))
+
+    def test_submit_url_uses_fetch_kind_and_archive_password(self):
+        opener = FakeOpener([FakeResponse(status=201, payload={"id": "submitted-1", "kind": "file"})])
+        client = TriageClient("secret-key", opener=opener)
+
+        result = client.submit_url("https://payload.example/a.zip", password="github")
+
+        self.assertTrue(result["ok"])
+        req = opener.requests[0]
+        self.assertEqual(req.get_method(), "POST")
+        self.assertIn("/v0/samples", req.full_url)
+        body = json.loads(req.data.decode("utf-8"))
+        self.assertEqual(body["kind"], "fetch")
+        self.assertEqual(body["url"], "https://payload.example/a.zip")
+        self.assertEqual(body["password"], "github")
+        self.assertFalse(body["interactive"])
+        self.assertEqual(body["timeout"], 200)
 
 
 if __name__ == "__main__":
