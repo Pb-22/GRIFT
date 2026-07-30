@@ -71,46 +71,39 @@ When a key is present, GRIFT validates it before the run and prints a clear succ
 
 ## App inputs
 
-GRIFT uses `brands.yaml` as the durable target list.
+GRIFT uses `brands.yaml` as the active target list. The optional
+`input/apps.txt` file is a simple source list for rebuilding that target list.
 
-For simple user input, create a text file such as `input/apps.txt`:
+Create one target per line:
 
 ```text
 Audacity
 TeamViewer
+PDF converter
 "SQL Server Management Studio" SSMS
 ```
 
-Then import it:
+Rebuild the active target list from `input/apps.txt`:
 
 ```bash
-python grift.py --import-apps input/apps.txt
-```
-
-To rebuild `brands.yaml` from the app list after editing `input/apps.txt`, reset the
-brand file first and then import:
-
-```bash
-printf 'brands: []\ndefaults:\n  min_score_report: 4\n  per_query_results: 20\n' > brands.yaml && python grift.py --import-apps input/apps.txt
+printf 'brands: []\ndefaults:\n  min_score_report: 4\n  per_query_results: 20\n' > brands.yaml && python grift.py --import-apps input/apps.txt && python grift.py --list-brands
 ```
 
 Input rules:
 
-- plain line: app name
-- multiword plain line: imported as the plain app name; GRIFT does not invent acronym targets such as `PC` for `PDF converter`
-- quoted full product phrase plus acronym: use this when an acronym is important, such as `"SQL Server Management Studio" SSMS`
-- blank lines ignored
-- lines starting with `#` ignored
+- one application, product, or lure theme per line
+- quoted full-product plus acronym entries create acronym searches, for example `"SQL Server Management Studio" SSMS`
+- unquoted entries use the written phrase as the search target
+- blank lines and lines starting with `#` are ignored
 
-Examples:
+Example import result:
 
 ```text
-Audacity
-SQL Server Management Studio
-"SQL Server Management Studio" SSMS
+PDF converter -> PDF converter download windows, PDF converter Windows Download, PDF converter in:name
+"SQL Server Management Studio" SSMS -> "SQL Server Management Studio" download, SSMS download, SSMS in:name
 ```
 
-The plain `SQL Server Management Studio` line imports that full phrase as the target name. The quoted `"SQL Server Management Studio" SSMS` line imports `SSMS` as an ambiguous acronym target with the full product phrase attached as context. Use the quoted form only when you intentionally want acronym queries.
+Use the quoted acronym form only for products where the acronym is a useful hunt target.
 
 ## `brands.yaml` format
 
@@ -159,28 +152,40 @@ python grift.py --set-triage-key
 
 `GITHUB_TOKEN` is used for GitHub API rate limits. `TRIAGE_KEY` is used only when Stage 2 options are requested. Keys are stored in `.env`, masked in output, and ignored by git.
 
-### 1. Import or review the app list
+### 1. Build the target list
 
-`input/apps.txt` is a simple editing surface for app names. It does not change searches until imported into `brands.yaml`.
-
-```bash
-python grift.py --import-apps input/apps.txt
-python grift.py --list-brands
-```
-
-To regenerate the active app configuration from a clean app list:
+`input/apps.txt` is optional. Searches use `brands.yaml`, so rebuild `brands.yaml`
+after changing the source list.
 
 ```bash
 printf 'brands: []\ndefaults:\n  min_score_report: 4\n  per_query_results: 20\n' > brands.yaml && python grift.py --import-apps input/apps.txt && python grift.py --list-brands
 ```
 
-Interactive runs also show the configured app list before searching. At that prompt:
+### 2. Full read-only search
+
+This command runs GitHub search, candidate scoring, payload URL enrichment, and
+read-only tria.ge lookup. It does not submit samples to tria.ge.
+
+```bash
+python grift.py --skip-app-review --created-after 2026-07-01 --enrich-urls --triage-lookup --triage-min-score 8 --triage-max-urls 3 --triage-timeout 10 --out out/run-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+Primary outputs:
+
+```text
+out/run-*/report_latest.md
+out/run-*/candidates_latest.json
+```
+
+### 3. Interactive app review
+
+Interactive runs show the configured app list before searching. At that prompt:
 
 - press Enter to continue with the current `brands.yaml`
 - type `import /absolute/path/to/apps.txt` to import a list immediately
 - type `edit` to stop and fix the list before searching
 
-### 2. Stage 1 only: GitHub candidate queue
+### 4. Stage 1 only: GitHub candidate queue
 
 Stage 1 searches GitHub, scores candidate repos, extracts README/download context, and writes the roll-up report. It does not contact tria.ge.
 
@@ -208,19 +213,12 @@ python grift.py --cron --created-after 2026-07-01 --out out/cron-latest
 
 In cron mode, `GITHUB_TOKEN` is required and prompts are disabled.
 
-### 3. Stage 1 + Stage 2 lookup: read-only tria.ge context
+### 5. Stage 1 + Stage 2 lookup: read-only tria.ge context
 
 This is the recommended full non-submitting run. It does Stage 1, enriches URLs, then checks tria.ge for existing reports tied to high-scoring candidate payload URLs.
 
 ```bash
-python grift.py \
-  --skip-app-review \
-  --created-after 2026-07-01 \
-  --enrich-urls \
-  --triage-lookup \
-  --triage-min-score 8 \
-  --triage-max-urls 3 \
-  --out out/run-$(date -u +%Y%m%dT%H%M%SZ)
+python grift.py --skip-app-review --created-after 2026-07-01 --enrich-urls --triage-lookup --triage-min-score 8 --triage-max-urls 3 --triage-timeout 10 --out out/run-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
 Look first at:
@@ -232,9 +230,9 @@ out/run-*/candidates_latest.json
 
 `report_latest.md` will include a compact tria.ge section when Stage 2 is enabled. `candidates_latest.json` keeps the structured lookup data.
 
-### 4. Stage 1 + Stage 2 submit: intentionally send candidate URLs to tria.ge
+### 6. Stage 1 + Stage 2 submit: intentionally send candidate URLs to tria.ge
 
-Use this only when you intentionally want tria.ge to fetch/analyze candidate payload URLs. GRIFT requires the explicit safety flag.
+Submission mode asks tria.ge to fetch and analyze candidate payload URLs. GRIFT requires the explicit safety flag.
 
 ```bash
 python grift.py \
@@ -253,11 +251,11 @@ python grift.py \
 Submission notes:
 
 - `--triage-submit` never runs without `--i-understand-this-submits-malware`.
-- By default, lookup errors do not force submissions. Add `--triage-submit-on-lookup-error` when you want submission despite lookup timeout/failure.
+- By default, lookup errors do not force submissions. `--triage-submit-on-lookup-error` allows submission despite lookup timeout or failure.
 - Remote samples are submitted as tria.ge `kind=fetch` URL jobs with the extracted archive password when present.
 - The run report and JSON output contain submission status and sample IDs when tria.ge returns them.
 
-### 5. Pull full IoC reports for known tria.ge sample IDs
+### 7. Pull full IoC reports for known tria.ge sample IDs
 
 Stage 2 lookup/submission data in `report_latest.md` is compact. Full IoC summaries are pulled separately by sample ID:
 
@@ -303,7 +301,7 @@ The Markdown report includes high-scoring tasks, high-scoring files, and bulk-co
 
 | Option | Meaning |
 |---|---|
-| `--import-apps input/apps.txt` | Import simple app seeds into `brands.yaml`. Plain multiword app names stay plain; quoted full-product plus acronym lines create acronym aliases. |
+| `--import-apps input/apps.txt` | Import app seeds into `brands.yaml`. Quoted full-product plus acronym lines create acronym aliases. |
 | `--list-brands` | Show configured targets, product aliases, derived queries, official org/domain suppressors, and notes. |
 | `--skip-app-review` | Do not show the interactive configured-app review prompt before searching. |
 | `--add-brand NAME` | Add or update a target in `brands.yaml`. |
@@ -344,6 +342,7 @@ The Markdown report includes high-scoring tasks, high-scoring files, and bulk-co
 | `--triage-min-score N` | Minimum candidate score for Stage 2 lookup/submission. Default is `8`. |
 | `--triage-max-urls N` | Maximum candidate payload URLs sent to Stage 2 per candidate. Default is `3`. |
 | `--triage-profile NAME` | tria.ge analysis profile for URL submissions. Default is `default`. |
+| `--triage-timeout SECONDS` | Per-request tria.ge API timeout. Default is `10`. |
 | `--triage-report SAMPLE_ID` | Pull and summarize an existing tria.ge sample ID. Repeatable. Writes `triage_report_<sample_id>.*`. |
 
 ## Stage 2 tria.ge behavior
