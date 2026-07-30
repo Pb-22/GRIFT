@@ -11,7 +11,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -22,7 +22,7 @@ from lib.enrich import enrich_top_urls  # noqa: E402
 from lib.extract import extract_from_readme  # noqa: E402
 from lib.github_client import GitHubClient, GitHubRateLimitError  # noqa: E402
 from lib.keys import prompt_with_timeout, resolve_keys  # noqa: E402
-from lib.report import write_outputs  # noqa: E402
+from lib.report import write_final_ioc_outputs, write_outputs  # noqa: E402
 from lib.score import score_candidate  # noqa: E402
 from lib.triage import TriageClient, enrich_candidates_with_triage, write_triage_report_outputs  # noqa: E402
 
@@ -151,6 +151,40 @@ def validate_or_exit(brands_path: Path) -> None:
         print(f"  - {issue}", file=sys.stderr)
     print("Fix the list with --list-brands, --add-brand, or --import-apps input/apps.txt before running.", file=sys.stderr)
     raise SystemExit(2)
+
+
+def attach_triage_reports(candidates: list[dict[str, Any]], client: Any, *, progress: Optional[Callable[[dict[str, Any]], None]] = None) -> int:
+    """Pull tria.ge reports referenced by lookup/submission results and attach them to candidates."""
+    cache: dict[str, dict[str, Any]] = {}
+    count = 0
+    for candidate in candidates:
+        triage = candidate.get("triage") if isinstance(candidate.get("triage"), dict) else None
+        if not triage:
+            continue
+        sample_ids: list[str] = []
+        for lookup in triage.get("lookups") or []:
+            for hit in lookup.get("results") or []:
+                sample_id = hit.get("id") or hit.get("sample")
+                if sample_id and sample_id not in sample_ids:
+                    sample_ids.append(str(sample_id))
+        for submitted in triage.get("submissions") or []:
+            sample_id = submitted.get("sample_id")
+            if sample_id and sample_id not in sample_ids:
+                sample_ids.append(str(sample_id))
+        reports = []
+        for sample_id in sample_ids:
+            if sample_id not in cache:
+                if progress:
+                    progress({"event": "report_pull_start", "candidate": candidate.get("full_name"), "sample_id": sample_id})
+                cache[sample_id] = client.collect_report(sample_id)
+                count += 1
+                if progress:
+                    s = cache[sample_id].get("summary_iocs") or {}
+                    progress({"event": "report_pull_done", "candidate": candidate.get("full_name"), "sample_id": sample_id, "score": s.get("score"), "target": s.get("target")})
+            reports.append(cache[sample_id])
+        if reports:
+            triage["reports"] = reports
+    return count
 
 
 def init_project(root: Path) -> None:
@@ -655,6 +689,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                         f"errors={s.get('errors', 0)}",
                         flush=True,
                     )
+                elif kind == "report_pull_start":
+                    print(f"  tria.ge report pull: {event.get('candidate')} sample={event.get('sample_id')}", flush=True)
+                elif kind == "report_pull_done":
+                    print(f"  tria.ge report done: sample={event.get('sample_id')} score={event.get('score')} target={event.get('target')}", flush=True)
 
             triage_client = TriageClient(keys.triage_key, timeout=args.triage_timeout)
             triage_summary = enrich_candidates_with_triage(
@@ -668,6 +706,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 progress=show_triage_progress,
             )
             triage_summary["status"] = "completed"
+            pulled_reports = attach_triage_reports(candidates, triage_client, progress=show_triage_progress)
+            triage_summary["reports_pulled"] = pulled_reports
 
     meta["triage_lookup_requested"] = bool(args.triage_lookup)
     meta["triage_submit_requested"] = bool(args.triage_submit)
@@ -679,6 +719,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         meta=meta,
         defang_markdown=not args.raw_report,
     )
+    final_paths = write_final_ioc_outputs(args.out, candidates=candidates, meta=meta)
+    paths.update(final_paths)
 
     print("\n== Done ==")
     print(f"  candidates: {len(candidates)}")
@@ -696,6 +738,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"  CSV:  {paths['csv']}")
     print(f"  MD:   {paths['md']}")
     print(f"  latest MD: {paths['md_latest']}")
+    print(f"  final IoC JSON: {paths['final_json_latest']}")
+    print(f"  final IoC TXT:  {paths['final_txt_latest']}")
     if triage_summary.get("status") != "not_requested":
         print(f"  tria.ge Stage 2: {triage_summary.get('status')}")
         print(f"    candidates considered: {triage_summary.get('candidates_considered', 0)}")

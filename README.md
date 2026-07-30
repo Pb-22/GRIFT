@@ -356,6 +356,8 @@ Stage 2:
 - submits remote samples as tria.ge `kind=fetch` URL jobs with archive password, `interactive=false`, `timeout=200`, and `network=internet`
 - only considers candidates at or above `--triage-min-score`
 - stores lookup and submission results inside `candidates_*.json`
+- pulls the referenced tria.ge reports for lookup hits and successful submissions
+- writes concise final IoC reports as `final_iocs_latest.json` and `final_iocs_latest.txt`
 - adds a compact tria.ge section to the run Markdown report
 - never stores or prints the tria.ge API key
 
@@ -369,9 +371,15 @@ candidates_latest.json
 candidates_<timestamp>.csv
 report_<timestamp>.md
 report_latest.md
+final_iocs_<timestamp>.json
+final_iocs_latest.json
+final_iocs_<timestamp>.txt
+final_iocs_latest.txt
 ```
 
 `report_latest.md` is the roll-up summary for the run. It lists candidates meeting the configured score threshold, explains why they scored, includes payload URL buckets, and includes Stage 2 tria.ge lookup/submission status when enabled.
+
+`final_iocs_latest.json` and `final_iocs_latest.txt` are the analyst-facing IoC reports. They are grouped by app name and repository, include a short score summary, list high-scoring filenames beside SHA256/MD5/SHA1, then provide bulk hash, domain, and URL lists. They only include repositories with dangerous-looking tria.ge report output; routine browser, OS, certificate, CDN, and public IP-check traffic is suppressed.
 
 Full tria.ge report pulls write one IoC summary per sample:
 

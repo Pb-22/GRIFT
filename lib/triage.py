@@ -21,11 +21,57 @@ from typing import Any, Callable, Optional
 DEFAULT_BASE_URL = "https://tria.ge/api"
 USER_AGENT = "GRIFT/1.0 (defensive research)"
 CERTIFICATE_INFRASTRUCTURE_HOSTS = {
+    "c.pki.goog",
     "timestamp.digicert.com",
     "timestamp.intel.com",
     "www.digicert.com",
+    "www.microsoft.com",
     "pki.intel.com",
 }
+BENIGN_REPORT_HOSTS = {
+    "api.ipify.org",
+    "ax-0002.ax-msedge.net",
+    "bing.com",
+    "copilot.microsoft.com",
+    "dns.google",
+    "dual.part-0036.t-0009.fb-t-msedge.net",
+    "edge-cloud-resource-static.afd.azureedge.net",
+    "edge-cloud-resource-static.azureedge.net",
+    "edge-consumer-static.afd.azureedge.net",
+    "edge-consumer-static.azureedge.net",
+    "edge-mobile-static.afd.azureedge.net",
+    "edge-mobile-static.azureedge.net",
+    "edge.microsoft.com",
+    "g.bing.com",
+    "icanhazip.com",
+    "ifconfig.me",
+    "ipinfo.io",
+    "ipwho.is",
+    "microsoft.com",
+    "mr-afd-azuredge.tm-azurefd.net",
+    "part-0036.t-0009.fb-t-msedge.net",
+    "pki-goog.l.google.com",
+    "res-1.public.onecdn.static.microsoft",
+    "res-ocdi-public.trafficmanager.net",
+    "res-ocdi-stls-prod.edgesuite.net",
+    "res.public.onecdn.static.microsoft",
+    "static.edge.microsoftapp.net",
+    "www.bing.com",
+}
+BENIGN_REPORT_DOMAIN_SUFFIXES = (
+    ".akadns.net",
+    ".akamai.net",
+    ".akamaiedge.net",
+    ".azureedge.net",
+    ".cloudapp.azure.com",
+    ".edgekey.net",
+    ".l.google.com",
+    ".microsoft.com",
+    ".msedge.net",
+    ".trafficmanager.net",
+    ".windows.com",
+)
+IMPORTANT_URL_EXTENSIONS = (".exe", ".dll", ".zip", ".rar", ".7z", ".msi", ".ps1", ".vbs", ".bat", ".cmd", ".scr")
 
 UrlOpener = Callable[..., Any]
 
@@ -225,22 +271,62 @@ class TriageClient:
             "data": response.get("data") or {},
         }
 
+    def get_public_page_data(self, sample_id: str) -> dict[str, Any]:
+        """Fetch and parse public tria.ge page data when the API omits browser-visible fields."""
+        public_base = self.base_url[:-4] if self.base_url.endswith("/api") else self.base_url
+        url = f"{public_base}/{urllib.parse.quote(sample_id.strip())}"
+        req = urllib.request.Request(url, headers={"Accept": "text/html", "User-Agent": USER_AGENT})
+        try:
+            with self.opener(req, timeout=self.timeout, context=self.context) as resp:
+                raw = resp.read().decode("utf-8", "replace")
+            data = _extract_page_data_from_public_html(raw)
+            if data:
+                return {"ok": True, "status": getattr(resp, "status", None), "data": data}
+            return {"ok": False, "status": getattr(resp, "status", None), "error": "page data not found in public page"}
+        except Exception as e:
+            return {"ok": False, "status": None, "error": f"{type(e).__name__}: {e}"}
+
+    def get_public_overview(self, sample_id: str) -> dict[str, Any]:
+        """Fetch and parse public tria.ge overview data."""
+        page = self.get_public_page_data(sample_id)
+        if page.get("ok"):
+            raw_data = page.get("data")
+            data = raw_data if isinstance(raw_data, dict) else {}
+            overview = data.get("overview") if isinstance(data.get("overview"), dict) else {}
+            if overview:
+                return {"ok": True, "status": page.get("status"), "data": overview}
+        return page
+
     def collect_report(self, sample_id: str, *, include_static: bool = True) -> dict[str, Any]:
         """Pull the useful available report surfaces for a sample id."""
         sample_id = sample_id.strip()
-        report: dict[str, Any] = {"sample_id": sample_id, "sample": {}, "summary": {}, "static": {}, "errors": []}
-        sample = self.get_json(f"/v0/samples/{urllib.parse.quote(sample_id)}")
+        report: dict[str, Any] = {"sample_id": sample_id, "sample": {}, "summary": {}, "overview": {}, "static": {}, "errors": []}
+        quoted_id = urllib.parse.quote(sample_id)
+        sample = self.get_json(f"/v0/samples/{quoted_id}")
         if sample.get("ok"):
             report["sample"] = sample.get("data") or {}
         else:
             report["errors"].append({"surface": "sample", "error": sample})
-        summary = self.get_json(f"/v0/samples/{urllib.parse.quote(sample_id)}/summary")
+        summary = self.get_json(f"/v0/samples/{quoted_id}/summary")
         if summary.get("ok"):
             report["summary"] = summary.get("data") or {}
         else:
             report["errors"].append({"surface": "summary", "error": summary})
+        overview = self.get_json(f"/v0/samples/{quoted_id}/overview")
+        if overview.get("ok"):
+            report["overview"] = overview.get("data") or {}
+        else:
+            public_page = self.get_public_page_data(sample_id)
+            if public_page.get("ok"):
+                raw_page_data = public_page.get("data")
+                page_data = raw_page_data if isinstance(raw_page_data, dict) else {}
+                report["overview"] = page_data.get("overview") or {}
+                report["thirdparty"] = page_data.get("thirdparty") or {}
+            else:
+                report["errors"].append({"surface": "overview", "error": overview})
+                report["errors"].append({"surface": "public_page", "error": public_page})
         if include_static:
-            static = self.get_json(f"/v0/samples/{urllib.parse.quote(sample_id)}/static")
+            static = self.get_json(f"/v0/samples/{quoted_id}/static")
             if static.get("ok"):
                 report["static"] = static.get("data") or {}
             else:
@@ -500,8 +586,10 @@ def summarize_triage_report(report: dict[str, Any], *, min_report_score: int = 5
     """
     sample = report.get("sample") or {}
     summary_doc = report.get("summary") or {}
+    overview = report.get("overview") or {}
+    thirdparty = report.get("thirdparty") or {}
     static = report.get("static") or {}
-    sample_id = report.get("sample_id") or sample.get("id") or summary_doc.get("sample")
+    sample_id = report.get("sample_id") or sample.get("id") or summary_doc.get("sample") or _dig(overview, "sample", "id")
     out: dict[str, Any] = {
         "sample_id": sample_id,
         "status": sample.get("status") or summary_doc.get("status"),
@@ -543,7 +631,7 @@ def summarize_triage_report(report: dict[str, Any], *, min_report_score: int = 5
             if str(target) not in out["selected_files"]:
                 out["selected_files"].append(str(target))
 
-    for sig in static.get("signatures") or []:
+    for sig in (overview.get("signatures") or []) + (static.get("signatures") or []):
         if not isinstance(sig, dict):
             continue
         score = int(sig.get("score") or 0)
@@ -554,9 +642,64 @@ def summarize_triage_report(report: dict[str, Any], *, min_report_score: int = 5
             out["signatures"].append(str(name))
         for indicator in sig.get("indicators") or []:
             if isinstance(indicator, dict):
-                resource = indicator.get("resource")
+                resource = indicator.get("resource") or indicator.get("ioc")
                 if resource:
                     high_targets.add(str(resource).split("/")[-1])
+
+    for target in overview.get("targets") or []:
+        if not isinstance(target, dict):
+            continue
+        score = int(target.get("score") or 0)
+        if score < min_report_score:
+            continue
+        target_name = target.get("target") or target.get("name")
+        if target_name:
+            out["high_score_tasks"].append(
+                {
+                    "id": str(target.get("task") or target.get("id") or target_name),
+                    "kind": target.get("kind"),
+                    "score": score,
+                    "target": target_name,
+                    "sigs": [s.get("label") or s.get("name") for s in target.get("signatures") or [] if isinstance(s, dict)],
+                    "os": target.get("os"),
+                }
+            )
+            if str(target_name) not in out["selected_files"]:
+                out["selected_files"].append(str(target_name))
+            high_targets.add(str(target_name).split("/")[-1])
+        for sig in target.get("signatures") or []:
+            if not isinstance(sig, dict):
+                continue
+            name = sig.get("name") or sig.get("label")
+            if name and name not in out["signatures"]:
+                out["signatures"].append(str(name))
+        raw_iocs = target.get("iocs")
+        iocs = raw_iocs if isinstance(raw_iocs, dict) else {}
+        for url in iocs.get("urls") or []:
+            url_s = str(url)
+            if _is_likely_important_url(url_s) and url_s not in out["iocs"]["urls"]:
+                out["iocs"]["urls"].append(url_s)
+        for domain in iocs.get("domains") or []:
+            domain_s = str(domain).strip().strip(".")
+            if _is_likely_important_domain(domain_s) and domain_s not in out["iocs"]["domains"]:
+                out["iocs"]["domains"].append(domain_s)
+        for ip in iocs.get("ips") or []:
+            ip_s = str(ip).strip()
+            if ip_s and _is_likely_important_ip(ip_s, out["iocs"]["urls"]) and ip_s not in out["iocs"]["ips"]:
+                out["iocs"]["ips"].append(ip_s)
+
+    requested = _dig(thirdparty, "risk_scores", "data", "requested")
+    if isinstance(requested, dict):
+        # tria.ge risk-score requested lists include browser/OS background traffic.
+        # Promote only values that look like payload, campaign, or suspicious staging infrastructure.
+        for url in requested.get("url") or []:
+            url_s = str(url)
+            if _is_likely_important_url(url_s) and url_s not in out["iocs"]["urls"]:
+                out["iocs"]["urls"].append(url_s)
+        for domain in requested.get("domain") or []:
+            domain_s = str(domain).strip().strip(".")
+            if _is_likely_important_domain(domain_s) and domain_s not in out["iocs"]["domains"]:
+                out["iocs"]["domains"].append(domain_s)
 
     for f in static.get("files") or []:
         if not isinstance(f, dict):
@@ -645,6 +788,134 @@ def write_triage_report_outputs(out_dir: Path, sample_id: str, report: dict[str,
             lines.append(f"- `{err.get('surface')}`: `{(err.get('error') or {}).get('status')}` `{(err.get('error') or {}).get('error')}`")
     md_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return {"json": json_path, "md": md_path}
+
+
+def _extract_js_object_after_marker(html: str, marker: str) -> dict[str, Any]:
+    start = html.find(marker)
+    if start < 0:
+        return {}
+    brace = html.find("{", start + len(marker))
+    if brace < 0:
+        return {}
+    depth = 0
+    in_string = False
+    quote = ""
+    escape = False
+    end = -1
+    for idx in range(brace, len(html)):
+        ch = html[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == quote:
+                in_string = False
+            continue
+        if ch in ("'", '"'):
+            in_string = True
+            quote = ch
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = idx + 1
+                break
+    if end < 0:
+        return {}
+    block = html[brace:end]
+    block = re.sub(r"(?<=[{,])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:", r'"\1":', block)
+    try:
+        parsed = json.loads(block)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _extract_page_data_from_public_html(html: str) -> dict[str, Any]:
+    """Extract browser-visible page data embedded in tria.ge's public report page."""
+    data = {}
+    overview = _extract_js_object_after_marker(html, "overview:")
+    thirdparty = _extract_js_object_after_marker(html, "thirdparty:")
+    if overview:
+        data["overview"] = overview
+    if thirdparty:
+        data["thirdparty"] = thirdparty
+    return data
+
+
+def _extract_overview_from_public_html(html: str) -> dict[str, Any]:
+    """Extract the overview object embedded in tria.ge's public report page."""
+    return _extract_page_data_from_public_html(html).get("overview") or {}
+
+
+def _is_benign_report_domain(domain: str) -> bool:
+    d = domain.lower().strip(".")
+    if not d or _is_certificate_noise_domain(d) or _is_certificate_oid_token(d):
+        return True
+    if d in BENIGN_REPORT_HOSTS:
+        return True
+    if any(d == suffix.lstrip(".") or d.endswith(suffix) for suffix in BENIGN_REPORT_DOMAIN_SUFFIXES):
+        return True
+    if d.endswith(".ip6.arpa") or d.endswith(".in-addr.arpa"):
+        return True
+    return False
+
+
+def _is_likely_important_domain(domain: str) -> bool:
+    d = domain.lower().strip(".")
+    if not d or _is_benign_report_domain(d):
+        return False
+    try:
+        ipaddress.ip_address(d)
+        return False
+    except ValueError:
+        pass
+    if any(token in d for token in ("microsoft", "msedge", "azure", "bing", "copilot", "windows", "akamaiedge", "cloudflare")):
+        return False
+    suspicious_tokens = ("c2", "ggr", "sro", "m36", "akasia", "pelors", "peluang", "telegram", "steamcommunity", "dropbox", "github", "launcher", "download", "setup", "payload")
+    if any(token in d for token in suspicious_tokens):
+        return True
+    return False
+
+
+def _is_likely_important_url(url: str) -> bool:
+    if _is_certificate_noise_url(url):
+        return False
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower().strip(".")
+    path = (parsed.path or "").lower()
+    if not host or _is_benign_report_domain(host):
+        return False
+    if is_static_or_decorative_url(url):
+        return False
+    if host in {"t.me", "telegram.me"} or host.endswith(".t.me"):
+        return True
+    if host == "steamcommunity.com" and "/profiles/" in path:
+        return True
+    if any(path.endswith(ext) for ext in IMPORTANT_URL_EXTENSIONS):
+        return True
+    if any(token in host for token in ("ggr", "launcher", "download", "github")):
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_likely_important_ip(ip: str, urls: list[str]) -> bool:
+    if _is_certificate_oid_token(ip):
+        return False
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_reserved:
+        return False
+    return any((urllib.parse.urlparse(u).hostname or "") == ip for u in urls)
 
 
 def _is_certificate_noise_url(url: str) -> bool:

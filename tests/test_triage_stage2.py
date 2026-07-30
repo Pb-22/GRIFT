@@ -308,7 +308,7 @@ class TriageStage2Tests(unittest.TestCase):
                     {"filename": "Install.exe", "sha256": "d" * 64, "sha1": "e" * 40, "md5": "f" * 32, "selected": True},
                     {"filename": "low.dll", "sha256": "1" * 64, "selected": True},
                 ],
-                "strings": ["https://c2.example/a", "192.0.2.10"],
+                "strings": ["https://c2.example/a", "192.162.199.149"],
             },
         }
 
@@ -323,8 +323,98 @@ class TriageStage2Tests(unittest.TestCase):
         self.assertIn("f" * 32, summary["iocs"]["md5"])
         self.assertNotIn("1" * 64, summary["iocs"]["sha256"])
         self.assertNotIn("https://c2.example/a", summary["iocs"]["urls"])
-        self.assertNotIn("192.0.2.10", summary["iocs"]["ips"])
+        self.assertNotIn("192.162.199.149", summary["iocs"]["ips"])
         self.assertIn("Install.exe", summary["selected_files"])
+
+    def test_summarize_triage_report_extracts_overview_target_iocs(self):
+        report = {
+            "sample": {"id": "sample-1", "status": "reported", "filename": "payload.zip"},
+            "summary": {"score": 10},
+            "overview": {
+                "signatures": [{"name": "Downloads MZ/PE file", "score": 8}],
+                "targets": [
+                    {
+                        "target": "Installer.exe",
+                        "score": 10,
+                        "signatures": [{"label": "download_pe", "name": "Downloads MZ/PE file", "score": 8}],
+                        "iocs": {
+                            "urls": ["http://192.162.199.149/payload.exe", "http://c.pki.goog/r/r1.crl"],
+                            "domains": ["c2.example", "c.pki.goog"],
+                            "ips": ["192.162.199.149", "1.3.6.1"],
+                        },
+                    },
+                    {
+                        "target": "low.dll",
+                        "score": 3,
+                        "iocs": {
+                            "urls": ["https://low.example/ignore"],
+                            "domains": ["low.example"],
+                            "ips": ["198.51.100.9"],
+                        },
+                    },
+                ],
+            },
+        }
+
+        summary = summarize_triage_report(report)
+
+        self.assertIn("Downloads MZ/PE file", summary["signatures"])
+        self.assertIn("Installer.exe", summary["selected_files"])
+        self.assertIn("http://192.162.199.149/payload.exe", summary["iocs"]["urls"])
+        self.assertIn("c2.example", summary["iocs"]["domains"])
+        self.assertIn("192.162.199.149", summary["iocs"]["ips"])
+        self.assertNotIn("http://c.pki.goog/r/r1.crl", summary["iocs"]["urls"])
+        self.assertNotIn("c.pki.goog", summary["iocs"]["domains"])
+        self.assertNotIn("1.3.6.1", summary["iocs"]["ips"])
+        self.assertNotIn("https://low.example/ignore", summary["iocs"]["urls"])
+        self.assertNotIn("low.example", summary["iocs"]["domains"])
+        self.assertNotIn("198.51.100.9", summary["iocs"]["ips"])
+
+    def test_collect_report_pulls_overview_surface_before_summarizing_iocs(self):
+        opener = FakeOpener([
+            FakeResponse(payload={"id": "sample-1", "status": "reported"}),
+            FakeResponse(payload={"sample": "sample-1", "score": 10}),
+            FakeResponse(payload={"targets": [{"target": "payload.exe", "score": 10, "iocs": {"domains": ["c2.example"]}}]}),
+            FakeResponse(payload={"files": []}),
+        ])
+        client = TriageClient("secret-key", opener=opener)
+
+        report = client.collect_report("sample-1")
+
+        self.assertEqual(len(opener.requests), 4)
+        self.assertTrue(opener.requests[2].full_url.endswith("/v0/samples/sample-1/overview"))
+        self.assertIn("c2.example", report["summary_iocs"]["iocs"]["domains"])
+
+    def test_summarize_triage_report_extracts_public_thirdparty_iocs(self):
+        report = {
+            "sample": {"id": "sample-1", "status": "reported"},
+            "summary": {"score": 10},
+            "thirdparty": {
+                "risk_scores": {
+                    "data": {
+                        "requested": {
+                            "hash": ["a" * 64, "b" * 40, "c" * 32],
+                            "url": ["http://192.162.199.149/payload.exe", "http://c.pki.goog/r/r1.crl"],
+                            "domain": ["c2.example", "c.pki.goog", "1.3.6.1"],
+                            "ip": ["192.162.199.149", "2.5.4.15"],
+                        }
+                    }
+                }
+            },
+        }
+
+        summary = summarize_triage_report(report)
+
+        self.assertNotIn("a" * 64, summary["iocs"]["sha256"])
+        self.assertNotIn("b" * 40, summary["iocs"]["sha1"])
+        self.assertNotIn("c" * 32, summary["iocs"]["md5"])
+        self.assertIn("http://192.162.199.149/payload.exe", summary["iocs"]["urls"])
+        self.assertIn("c2.example", summary["iocs"]["domains"])
+        self.assertNotIn("192.162.199.149", summary["iocs"]["ips"])
+        self.assertNotIn("http://c.pki.goog/r/r1.crl", summary["iocs"]["urls"])
+        self.assertNotIn("c.pki.goog", summary["iocs"]["domains"])
+        self.assertNotIn("1.3.6.1", summary["iocs"]["domains"])
+        self.assertNotIn("2.5.4.15", summary["iocs"]["ips"])
 
     def test_summarize_triage_report_filters_certificate_revocation_noise(self):
         report = {
@@ -343,7 +433,7 @@ class TriageStage2Tests(unittest.TestCase):
                     "https://payload.example/c2",
                     "fe-hpt-04168b48dafbce6b7.recfut.net",
                     "pro.su",
-                    "192.0.2.10",
+                    "192.162.199.149",
                     "1.3.6.1",
                     "2.5.4.15",
                 ],
@@ -355,7 +445,7 @@ class TriageStage2Tests(unittest.TestCase):
         self.assertNotIn("https://payload.example/c2", summary["iocs"]["urls"])
         self.assertNotIn("fe-hpt-04168b48dafbce6b7.recfut.net", summary["iocs"]["domains"])
         self.assertNotIn("pro.su", summary["iocs"]["domains"])
-        self.assertNotIn("192.0.2.10", summary["iocs"]["ips"])
+        self.assertNotIn("192.162.199.149", summary["iocs"]["ips"])
         self.assertNotIn("1.3.6.1", summary["iocs"]["ips"])
         self.assertNotIn("2.5.4.15", summary["iocs"]["ips"])
 

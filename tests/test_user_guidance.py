@@ -5,10 +5,10 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from hunt import import_apps_file, review_configured_brands
+from hunt import attach_triage_reports, import_apps_file, review_configured_brands
 from lib.brands import add_brand, load_brands, validate_brands
 from lib.github_client import GitHubClient
-from lib.report import write_outputs
+from lib.report import write_final_ioc_outputs, write_outputs
 from lib.triage import write_triage_report_outputs
 
 
@@ -135,6 +135,90 @@ class UserGuidanceTests(unittest.TestCase):
 
             self.assertIn("`Install.exe` — sha256 `" + "b" * 64 + "`", text)
             self.assertIn("### SHA256\n- `" + "a" * 64 + "`\n- `" + "b" * 64 + "`", text)
+    def test_final_ioc_report_groups_repos_by_app_and_excludes_empty_triage(self):
+        with tempfile.TemporaryDirectory() as d:
+            candidates = [
+                {
+                    "brand": "TeamViewer",
+                    "full_name": "owner/dangerous-repo",
+                    "html_url": "https://github.com/owner/dangerous-repo",
+                    "score_result": {
+                        "score": 9,
+                        "reasons": ["README mentions password", "payload/download URL(s)"],
+                        "download_urls": {"payload": ["https://github.com/stage/repo/releases/download/v/SoftwareSetup.zip"]},
+                    },
+                    "triage": {
+                        "reports": [
+                            {
+                                "sample_id": "sample-1",
+                                "summary_iocs": {
+                                    "selected_file_hashes": [
+                                        {"filename": "Setup.exe", "sha256": "a" * 64, "md5": "b" * 32, "sha1": "c" * 40}
+                                    ],
+                                    "iocs": {
+                                        "sha256": ["d" * 64],
+                                        "md5": [],
+                                        "sha1": [],
+                                        "domains": ["c2.example"],
+                                        "urls": ["http://192.0.2.10/payload.exe"],
+                                    },
+                                },
+                            }
+                        ]
+                    },
+                },
+                {
+                    "brand": "TeamViewer",
+                    "full_name": "owner/no-triage-hit",
+                    "html_url": "https://github.com/owner/no-triage-hit",
+                    "score_result": {"score": 9, "reasons": ["shape only"], "download_urls": {}},
+                    "triage": {"reports": []},
+                },
+            ]
+
+            paths = write_final_ioc_outputs(Path(d), candidates=candidates, meta={"generated_at": "now", "brands": ["TeamViewer"]})
+            text = paths["final_txt_latest"].read_text(encoding="utf-8")
+
+            self.assertIn("TeamViewer", text)
+            self.assertIn("owner/dangerous-repo", text)
+            self.assertIn("Setup.exe sha256=" + "a" * 64, text)
+            self.assertIn("c2.example", text)
+            self.assertIn("http://192.0.2.10/payload.exe", text)
+            self.assertNotIn("owner/no-triage-hit", text)
+
+    def test_attach_triage_reports_pulls_lookup_and_submission_sample_ids(self):
+        class FakeTriageClient:
+            def __init__(self):
+                self.pulled = []
+            def collect_report(self, sample_id):
+                self.pulled.append(sample_id)
+                return {"sample_id": sample_id, "summary_iocs": {"selected_file_hashes": []}}
+
+        candidates = [
+            {
+                "full_name": "owner/repo-a",
+                "triage": {
+                    "lookups": [{"results": [{"id": "sample-a"}]}],
+                    "submissions": [{"sample_id": "sample-b"}],
+                },
+            },
+            {
+                "full_name": "owner/repo-b",
+                "triage": {
+                    "lookups": [{"results": [{"id": "sample-a"}]}],
+                    "submissions": [],
+                },
+            },
+        ]
+        client = FakeTriageClient()
+
+        pulled = attach_triage_reports(candidates, client)
+
+        self.assertEqual(pulled, 2)
+        self.assertEqual(client.pulled, ["sample-a", "sample-b"])
+        self.assertEqual([r["sample_id"] for r in candidates[0]["triage"]["reports"]], ["sample-a", "sample-b"])
+        self.assertEqual([r["sample_id"] for r in candidates[1]["triage"]["reports"]], ["sample-a"])
+
     def test_markdown_report_always_states_stage2_status_summary(self):
         with tempfile.TemporaryDirectory() as d:
             paths = write_outputs(
