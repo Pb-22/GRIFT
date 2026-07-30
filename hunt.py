@@ -24,6 +24,7 @@ from lib.github_client import GitHubClient, GitHubRateLimitError  # noqa: E402
 from lib.keys import resolve_keys  # noqa: E402
 from lib.report import write_outputs  # noqa: E402
 from lib.score import score_candidate  # noqa: E402
+from lib.triage import TriageClient, enrich_candidates_with_triage  # noqa: E402
 
 
 def build_query(base: str, created_after: Optional[str]) -> str:
@@ -303,11 +304,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--defang-report", action="store_true", default=True, help="Defang URLs in Markdown output (default)")
     p.add_argument("--raw-report", action="store_true", help="Do not defang URLs in Markdown output")
 
-    # Optional Stage 2 scaffolding. These flags only resolve TRIAGE_KEY; lookup/submit
-    # implementation belongs behind this explicit surface, not in default Stage 1.
-    p.add_argument("--triage-lookup", action="store_true", help="Stage 2: prompt/load TRIAGE_KEY for future lookup mode")
-    p.add_argument("--triage-submit", action="store_true", help="Stage 2: explicit future submit mode; does not run without safety flag")
+    # Optional Stage 2 tria.ge enrichment. Lookup is read-only against existing
+    # tria.ge reports. Submit is gated by an explicit safety acknowledgement.
+    p.add_argument("--triage-lookup", action="store_true", help="Stage 2: look up payload URLs in tria.ge for candidates at or above --triage-min-score")
+    p.add_argument("--triage-submit", action="store_true", help="Stage 2: submit candidate payload URLs to tria.ge; requires explicit safety flag")
     p.add_argument("--triage-min-score", type=int, default=8)
+    p.add_argument("--triage-max-urls", type=int, default=3, help="Stage 2: max payload URLs per candidate")
+    p.add_argument("--triage-profile", default="default", help="Stage 2: tria.ge analysis profile for URL submissions")
     p.add_argument("--i-understand-this-submits-malware", action="store_true")
 
     # mode / keys
@@ -466,9 +469,28 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"Hunt failed: {e}", file=sys.stderr)
         return 1
 
+    triage_summary = {"enabled": False, "status": "not_requested"}
+    if need_triage:
+        if not keys.triage_key:
+            triage_summary = {"enabled": False, "status": "missing_key"}
+            print("  tria.ge: key not provided; Stage 2 skipped")
+        else:
+            print("  tria.ge: running Stage 2 lookup" + (" + submit" if args.triage_submit else ""))
+            triage_client = TriageClient(keys.triage_key)
+            triage_summary = enrich_candidates_with_triage(
+                candidates,
+                triage_client,
+                min_score=args.triage_min_score,
+                submit=bool(args.triage_submit),
+                max_urls_per_candidate=args.triage_max_urls,
+                submit_profile=args.triage_profile,
+            )
+            triage_summary["status"] = "completed"
+
     meta["triage_lookup_requested"] = bool(args.triage_lookup)
     meta["triage_submit_requested"] = bool(args.triage_submit)
-    meta["triage_stage2_status"] = "key_prompt_scaffold_only" if need_triage else "not_requested"
+    meta["triage_stage2_status"] = triage_summary.get("status")
+    meta["triage"] = triage_summary
     paths = write_outputs(
         args.out,
         candidates=candidates,
@@ -492,6 +514,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"  CSV:  {paths['csv']}")
     print(f"  MD:   {paths['md']}")
     print(f"  latest MD: {paths['md_latest']}")
+    if triage_summary.get("status") != "not_requested":
+        print(f"  tria.ge Stage 2: {triage_summary.get('status')}")
+        print(f"    candidates considered: {triage_summary.get('candidates_considered', 0)}")
+        print(f"    lookups attempted: {triage_summary.get('lookups_attempted', 0)}")
+        if triage_summary.get("submit"):
+            print(f"    submissions attempted: {triage_summary.get('submits_attempted', 0)}")
+        print(f"    lookup matches: {triage_summary.get('lookup_matches', 0)}")
+        print(f"    errors: {triage_summary.get('errors', 0)}")
     if meta.get("errors"):
         print(f"  errors: {len(meta['errors'])} (see JSON meta.errors)")
 

@@ -177,8 +177,35 @@ In cron mode, `GITHUB_TOKEN` is required and prompts are disabled.
 | `--skip-forks-gte 3` | Drop repos with too many forks |
 | `--enrich-urls` | Probe top payload URLs for high-scoring candidates |
 | `--raw-report` | Do not defang URLs in Markdown output |
-| `--triage-lookup` | Resolve tria.ge key for Stage 2 lookup work |
-| `--triage-submit` | Future gated submission surface |
+| `--triage-lookup` | Stage 2: search tria.ge for high-scoring candidate payload URLs |
+| `--triage-submit` | Stage 2: submit candidate payload URLs to tria.ge, gated by explicit safety flag |
+| `--triage-min-score 8` | Minimum score for tria.ge Stage 2 |
+| `--triage-max-urls 3` | Max payload URLs per candidate for tria.ge Stage 2 |
+| `--triage-profile default` | tria.ge analysis profile for URL submissions |
+
+## Stage 2 tria.ge enrichment
+
+Stage 1 always runs without tria.ge. Stage 2 only runs when requested and a `TRIAGE_KEY` is available.
+
+Lookup existing tria.ge reports for payload URLs from high-scoring candidates:
+
+```bash
+python grift.py --triage-lookup --triage-min-score 8 --created-after 2026-07-01
+```
+
+Submit candidate payload URLs to tria.ge only when you intentionally want detonation or URL analysis:
+
+```bash
+python grift.py --triage-submit --i-understand-this-submits-malware --triage-min-score 8
+```
+
+Stage 2 behavior:
+
+- collects payload, GitHub Release, Telegram, Dropbox, and unknown external URLs from candidates
+- only considers candidates at or above `--triage-min-score`
+- stores lookup and submission results inside `candidates_*.json`
+- adds a compact tria.ge section to the Markdown report
+- never stores or prints the tria.ge API key
 
 ## Outputs
 

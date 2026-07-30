@@ -127,6 +127,29 @@ def write_outputs(
         for kind in ("payload", "dropbox", "telegram", "github_release", "unknown_external"):
             for u in (dl.get(kind) or [])[:5]:
                 lines.append(f"  - [{kind}] {maybe_defang(u, defang_markdown)}")
+        triage = c.get("triage") or {}
+        if triage:
+            lines.append("- tria.ge Stage 2:")
+            for item in (triage.get("lookups") or [])[:5]:
+                status = "ok" if item.get("ok") else "error"
+                matches = item.get("matches", 0)
+                lines.append(
+                    f"  - lookup {status}, matches={matches}: {maybe_defang(item.get('url'), defang_markdown)}"
+                )
+                for hit in item.get("results") or []:
+                    sample_id = hit.get("id") or hit.get("sample") or "unknown"
+                    lines.append(f"    - sample: `{maybe_defang(sample_id, defang_markdown)}`")
+            for item in (triage.get("submissions") or [])[:5]:
+                if item.get("skipped"):
+                    lines.append(
+                        f"  - submit skipped ({item.get('reason', 'not submitted')}): {maybe_defang(item.get('url'), defang_markdown)}"
+                    )
+                    continue
+                status = "ok" if item.get("ok") else "error"
+                sample_id = item.get("sample_id") or "unknown"
+                lines.append(
+                    f"  - submit {status}, sample={maybe_defang(sample_id, defang_markdown)}: {maybe_defang(item.get('url'), defang_markdown)}"
+                )
         lines.append("")
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     paths["md"] = md_path
