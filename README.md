@@ -87,11 +87,18 @@ Then import it:
 python grift.py --import-apps input/apps.txt
 ```
 
+To rebuild `brands.yaml` from the app list after editing `input/apps.txt`, reset the
+brand file first and then import:
+
+```bash
+printf 'brands: []\ndefaults:\n  min_score_report: 4\n  per_query_results: 20\n' > brands.yaml && python grift.py --import-apps input/apps.txt
+```
+
 Input rules:
 
 - plain line: app name
-- multiword plain line: GRIFT derives an acronym and imports it as a full-name/acronym product alias
-- quoted full product phrase plus acronym: use this when you want to override or confirm the acronym
+- multiword plain line: imported as the plain app name; GRIFT does not invent acronym targets such as `PC` for `PDF converter`
+- quoted full product phrase plus acronym: use this when an acronym is important, such as `"SQL Server Management Studio" SSMS`
 - blank lines ignored
 - lines starting with `#` ignored
 
@@ -103,7 +110,7 @@ SQL Server Management Studio
 "SQL Server Management Studio" SSMS
 ```
 
-The two SQL Server Management Studio lines both guide GRIFT to use the full product phrase for identity and `SSMS` as an ambiguous acronym. If GRIFT derives the wrong acronym for a product, use the quoted form with the correct acronym.
+The plain `SQL Server Management Studio` line imports that full phrase as the target name. The quoted `"SQL Server Management Studio" SSMS` line imports `SSMS` as an ambiguous acronym target with the full product phrase attached as context. Use the quoted form only when you intentionally want acronym queries.
 
 ## `brands.yaml` format
 
@@ -159,6 +166,12 @@ python grift.py --set-triage-key
 ```bash
 python grift.py --import-apps input/apps.txt
 python grift.py --list-brands
+```
+
+To regenerate the active app configuration from a clean app list:
+
+```bash
+printf 'brands: []\ndefaults:\n  min_score_report: 4\n  per_query_results: 20\n' > brands.yaml && python grift.py --import-apps input/apps.txt && python grift.py --list-brands
 ```
 
 Interactive runs also show the configured app list before searching. At that prompt:
@@ -290,7 +303,7 @@ The Markdown report includes high-scoring tasks, high-scoring files, and bulk-co
 
 | Option | Meaning |
 |---|---|
-| `--import-apps input/apps.txt` | Import simple app seeds into `brands.yaml`. Plain multiword app names get derived acronym aliases. |
+| `--import-apps input/apps.txt` | Import simple app seeds into `brands.yaml`. Plain multiword app names stay plain; quoted full-product plus acronym lines create acronym aliases. |
 | `--list-brands` | Show configured targets, product aliases, derived queries, official org/domain suppressors, and notes. |
 | `--skip-app-review` | Do not show the interactive configured-app review prompt before searching. |
 | `--add-brand NAME` | Add or update a target in `brands.yaml`. |
