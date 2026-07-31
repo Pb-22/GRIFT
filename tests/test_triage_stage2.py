@@ -385,6 +385,31 @@ class TriageStage2Tests(unittest.TestCase):
         self.assertTrue(opener.requests[2].full_url.endswith("/v0/samples/sample-1/overview"))
         self.assertIn("c2.example", report["summary_iocs"]["iocs"]["domains"])
 
+    def test_summarize_triage_report_suppresses_known_fetch_error_hashes(self):
+        not_found_sha256 = "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"
+        report = {
+            "sample": {"id": "sample-not-found", "status": "reported", "kind": "file", "filename": "SoftwareSetup.zip", "sha256": not_found_sha256},
+            "summary": {"sample": "sample-not-found", "status": "reported", "score": 1, "target": "SoftwareSetup.zip", "sha256": not_found_sha256},
+            "static": {
+                "files": [
+                    {
+                        "filename": "SoftwareSetup.zip",
+                        "filesize": 9,
+                        "sha256": not_found_sha256,
+                        "sha1": "d205cbd6783332a212c5ae92d73c77178c2d2f28",
+                        "md5": "9d1ead73e678fa2f51a70a933b0bf017",
+                        "selected": False,
+                    }
+                ]
+            },
+        }
+
+        summary = summarize_triage_report(report)
+
+        self.assertEqual(summary["sha256"], not_found_sha256)
+        self.assertNotIn(not_found_sha256, summary["iocs"]["sha256"])
+        self.assertEqual(summary["selected_file_hashes"], [])
+
     def test_summarize_triage_report_extracts_public_thirdparty_iocs(self):
         report = {
             "sample": {"id": "sample-1", "status": "reported"},

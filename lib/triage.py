@@ -72,6 +72,13 @@ BENIGN_REPORT_DOMAIN_SUFFIXES = (
     ".windows.com",
 )
 IMPORTANT_URL_EXTENSIONS = (".exe", ".dll", ".zip", ".rar", ".7z", ".msi", ".ps1", ".vbs", ".bat", ".cmd", ".scr")
+KNOWN_FETCH_ERROR_SHA256 = {
+    # Common HTTP fetch-error bodies. These can appear when a GitHub release asset or repo
+    # has been removed before tria.ge fetches it; they are not malware artifacts.
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",  # empty body
+    "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5",  # "Not Found"
+    "d5558cd419c8d46bdc958064cb97f963d1ea793866414c025906ec15033512ed",  # "404: Not Found"
+}
 
 UrlOpener = Callable[..., Any]
 
@@ -604,7 +611,7 @@ def summarize_triage_report(report: dict[str, Any], *, min_report_score: int = 5
         "iocs": {"sha256": [], "sha1": [], "md5": [], "urls": [], "domains": [], "ips": []},
     }
 
-    if out.get("sha256"):
+    if out.get("sha256") and not _is_fetch_error_hash(out.get("sha256")):
         out["iocs"]["sha256"].append(str(out["sha256"]))
 
     high_targets: set[str] = set()
@@ -741,7 +748,7 @@ def write_triage_report_outputs(out_dir: Path, sample_id: str, report: dict[str,
         f"- Status: `{s.get('status')}`",
         f"- Score: `{s.get('score')}`",
         f"- Target: `{s.get('target')}`",
-        f"- SHA256: `{s.get('sha256')}`",
+        f"- SHA256: `{'suppressed known fetch-error body' if _is_fetch_error_hash(s.get('sha256')) else s.get('sha256')}`",
         "",
         "## High-scoring tria.ge tasks",
     ]
@@ -879,6 +886,10 @@ def _is_likely_important_domain(domain: str) -> bool:
     if any(token in d for token in suspicious_tokens):
         return True
     return False
+
+
+def _is_fetch_error_hash(value: Any) -> bool:
+    return str(value or "").strip().lower() in KNOWN_FETCH_ERROR_SHA256
 
 
 def _is_likely_important_url(url: str) -> bool:

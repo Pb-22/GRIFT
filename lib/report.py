@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Any
 
 
+FETCH_ERROR_SHA256 = {
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5",
+    "d5558cd419c8d46bdc958064cb97f963d1ea793866414c025906ec15033512ed",
+}
+
+
 def defang_text(text: str) -> str:
     """Defang URLs/domains for analyst Markdown reports."""
     text = text.replace("https://", "hxxps://").replace("http://", "hxxp://")
@@ -241,7 +248,7 @@ def _repo_final_iocs(candidate: dict[str, Any]) -> dict[str, Any] | None:
         md5s.extend(iocs.get("md5") or [])
         urls.extend(iocs.get("urls") or [])
         domains.extend(iocs.get("domains") or [])
-    sha256s = _dedupe(sha256s)
+    sha256s = [v for v in _dedupe(sha256s) if v.lower() not in FETCH_ERROR_SHA256]
     sha1s = _dedupe(sha1s)
     md5s = _dedupe(md5s)
     urls = _dedupe(urls)
