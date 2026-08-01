@@ -2,8 +2,6 @@
 
 GRIFT hunts short-lived GitHub README impostor fakeware: SEO-facing fake application or download repositories, often README-only, zero-reputation, and pointing to passworded or offsite payloads.
 
-It does not replace sandbox detonation or human review. It produces an explainable candidate queue for defensive research.
-
 ## What GRIFT looks for
 
 Positive signals include:
