@@ -418,17 +418,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--raw-report", action="store_true", help="Do not defang URLs in Markdown output")
     p.add_argument("--full-run", action="store_true", help="Run the full pipeline: GitHub hunt, URL enrichment, tria.ge lookup, tria.ge submission for new/error lookup targets, report pull, and final IoC output")
 
-    # Optional Stage 2 tria.ge enrichment. Lookup is read-only against existing
-    # tria.ge reports. Submit is gated by an explicit safety acknowledgement.
+    # Optional Stage 2 tria.ge enrichment. Lookup searches existing tria.ge
+    # reports. Submit sends candidate URL fetch jobs with password context.
     p.add_argument("--triage-lookup", action="store_true", help="Stage 2: look up payload URLs in tria.ge for candidates at or above --triage-min-score")
-    p.add_argument("--triage-submit", action="store_true", help="Stage 2: submit candidate payload URLs to tria.ge; requires explicit safety flag")
+    p.add_argument("--triage-submit", action="store_true", help="Stage 2: submit candidate payload URLs to tria.ge as fetch jobs with password context when available")
     p.add_argument("--triage-min-score", type=int, default=8)
     p.add_argument("--triage-max-urls", type=int, default=3, help="Stage 2: max payload URLs per candidate")
     p.add_argument("--triage-profile", default="default", help="Stage 2: tria.ge analysis profile for URL submissions")
     p.add_argument("--triage-timeout", type=float, default=10.0, help="Stage 2: seconds to wait for each tria.ge API request")
-    p.add_argument("--triage-submit-on-lookup-error", action="store_true", help="Stage 2: submit even when lookup times out/fails; still requires submit safety flag")
+    p.add_argument("--triage-submit-on-lookup-error", action="store_true", help="Stage 2: submit even when lookup times out/fails")
     p.add_argument("--triage-report", action="append", dest="triage_reports", help="Stage 2: pull and summarize an existing tria.ge sample id")
-    p.add_argument("--i-understand-this-submits-malware", action="store_true")
 
     # mode / keys
     p.add_argument("--cron", action="store_true", help="Non-interactive: no prompts; require GITHUB_TOKEN")
@@ -478,9 +477,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     if non_interactive:
         prompt_timeout = 0.0
 
-    if args.triage_submit and not args.full_run and not args.i_understand_this_submits_malware:
-        print("--triage-submit requires --i-understand-this-submits-malware", file=sys.stderr)
-        return 2
 
     if args.init:
         init_project(ROOT)

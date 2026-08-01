@@ -216,8 +216,7 @@ usage: grift.py [-h] [--brands BRANDS] [--out OUT]
                 [--triage-profile TRIAGE_PROFILE]
                 [--triage-timeout TRIAGE_TIMEOUT]
                 [--triage-submit-on-lookup-error]
-                [--triage-report TRIAGE_REPORTS]
-                [--i-understand-this-submits-malware] [--cron] [--yes]
+                [--triage-report TRIAGE_REPORTS] [--cron] [--yes]
                 [--prompt-timeout PROMPT_TIMEOUT] [--env-file ENV_FILE]
                 [--require-github-token] [--init] [--set-github-token]
                 [--set-triage-key] [--import-apps IMPORT_APPS]
@@ -250,14 +249,13 @@ usage: grift.py [-h] [--brands BRANDS] [--out OUT]
 | `--defang-report` | none | Defang URLs in Markdown output. This is the default. |
 | `--raw-report` | none | Do not defang URLs in Markdown output. |
 | `--triage-lookup` | none | Look up candidate payload URLs in tria.ge for candidates at or above `--triage-min-score`. |
-| `--triage-submit` | none | Submit candidate payload URLs to tria.ge. Use `--full-run` for the normal full-pipeline workflow. Direct use requires `--i-understand-this-submits-malware`. |
+| `--triage-submit` | none | Submit candidate payload URLs to tria.ge as fetch jobs with password context when available. Use `--full-run` for the normal full-pipeline workflow. |
 | `--triage-min-score` | TRIAGE_MIN_SCORE | Minimum candidate score for tria.ge lookup/submission. Tested value: 8. |
 | `--triage-max-urls` | TRIAGE_MAX_URLS | Maximum candidate payload URLs checked per candidate. Tested value: 3. |
 | `--triage-profile` | TRIAGE_PROFILE | tria.ge analysis profile for URL submissions. Default: `default`. |
 | `--triage-timeout` | TRIAGE_TIMEOUT | Seconds to wait for each tria.ge API request. Tested value: 10. |
-| `--triage-submit-on-lookup-error` | none | Submit when tria.ge lookup times out or fails. Direct use requires submission mode and the acknowledgement flag. |
+| `--triage-submit-on-lookup-error` | none | Submit when tria.ge lookup times out or fails. |
 | `--triage-report` | TRIAGE_REPORTS | Pull and summarize an existing tria.ge sample ID. Can be repeated. |
-| `--i-understand-this-submits-malware` | none | Required acknowledgement for direct `--triage-submit` usage. `--full-run` is the preferred full-pipeline switch. |
 | `--cron` | none | Non-interactive mode for scheduled runs. Disables prompts and requires `GITHUB_TOKEN`. |
 | `--yes`, `--non-interactive` | none | Same prompt behavior as `--cron`. |
 | `--prompt-timeout` | PROMPT_TIMEOUT | Seconds to wait for key prompts before defaulting. |
@@ -285,7 +283,7 @@ Stage 2:
 
 - collects payload, GitHub Release, Telegram, Dropbox, and unknown external URLs from candidates
 - carries extracted archive passwords such as `github` or `2026` with each URL
-- submits remote samples as tria.ge `kind=fetch` URL jobs with archive password, `interactive=false`, `timeout=200`, and `network=internet`
+- submits tria.ge `kind=fetch` URL jobs with `url=<candidate payload URL>`, `password=<extracted archive password>` when present, `interactive=false`, `timeout=200`, and `network=internet`
 - only considers candidates at or above `--triage-min-score`
 - stores lookup and submission results inside `candidates_*.json`
 - pulls referenced tria.ge reports for lookup hits and successful submissions
@@ -324,11 +322,9 @@ The tria.ge IoC Markdown is score-led. It lists high-scoring tasks first, then h
 
 Markdown reports are defanged by default. JSON and CSV preserve raw URLs for tooling.
 
-## Safety
+## Operational handling
 
-GRIFT is for defensive research. Do not execute downloaded files or click live candidate links on production hosts. Treat output as a triage queue, not attribution or verdict.
-
-`--triage-submit` is intentionally gated and refuses to run without `--i-understand-this-submits-malware`.
+GRIFT submits URLs and associated password context to tria.ge. GRIFT does not execute candidate payloads locally. Treat output as a triage queue, not attribution or verdict.
 
 ## Development checks
 

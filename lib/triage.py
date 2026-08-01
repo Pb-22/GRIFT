@@ -2,8 +2,9 @@
 
 The client intentionally keeps Stage 2 optional and explicit. Stage 1 never
 requires a tria.ge key. Lookup mode searches existing tria.ge reports for
-candidate payload URLs. Submit mode is only called by the CLI after the user
-passes the explicit malware-submission safety flag.
+candidate payload URLs. Submit mode sends candidate URL fetch jobs to tria.ge
+with archive password context when GRIFT extracts a password from repository
+instructions.
 """
 
 from __future__ import annotations

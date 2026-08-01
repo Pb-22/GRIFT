@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from hunt import attach_triage_reports, created_after_from_lookback_days, import_apps_file, review_configured_brands
+from hunt import attach_triage_reports, created_after_from_lookback_days, import_apps_file, main, review_configured_brands
 from lib.brands import add_brand, load_brands, validate_brands
+from lib.keys import KeyBundle
 from lib.github_client import GitHubClient
 from lib.report import write_final_ioc_outputs, write_outputs
 from lib.triage import write_triage_report_outputs
@@ -224,6 +225,16 @@ class UserGuidanceTests(unittest.TestCase):
         self.assertEqual(client.pulled, ["sample-a", "sample-b"])
         self.assertEqual([r["sample_id"] for r in candidates[0]["triage"]["reports"]], ["sample-a", "sample-b"])
         self.assertEqual([r["sample_id"] for r in candidates[1]["triage"]["reports"]], ["sample-a"])
+
+    def test_direct_triage_submit_no_longer_requires_acknowledgement_flag(self):
+        with patch("hunt.validate_or_exit"), \
+             patch("hunt.load_brands", return_value={"brands": [], "defaults": {}}), \
+             patch("hunt.resolve_keys", return_value=KeyBundle(github_token="gh", triage_key="triage")), \
+             patch("hunt.GitHubClient.validate_token", return_value={"ok": True}), \
+             patch("hunt.TriageClient.validate_key", return_value={"ok": True}):
+            result = main(["--skip-app-review", "--triage-submit", "--validate-only"])
+
+        self.assertEqual(result, 0)
 
     def test_markdown_report_always_states_stage2_status_summary(self):
         with tempfile.TemporaryDirectory() as d:
