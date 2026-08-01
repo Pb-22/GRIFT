@@ -71,8 +71,7 @@ When a key is present, GRIFT validates it before the run and prints a clear succ
 
 ## App inputs
 
-GRIFT uses `brands.yaml` as the active target list. The optional
-`input/apps.txt` file is a simple source list for rebuilding that target list.
+GRIFT uses `brands.yaml` as the active target list. The optional `input/apps.txt` file is a simple source list for rebuilding that target list.
 
 Create one target per line:
 
@@ -83,10 +82,10 @@ PDF converter
 "SQL Server Management Studio" SSMS
 ```
 
-Rebuild the active target list from `input/apps.txt`:
+Import `input/apps.txt` into `brands.yaml`:
 
 ```bash
-printf 'brands: []\ndefaults:\n  min_score_report: 4\n  per_query_results: 20\n' > brands.yaml && python grift.py --import-apps input/apps.txt && python grift.py --list-brands
+python grift.py --import-apps input/apps.txt
 ```
 
 Input rules:
@@ -95,13 +94,6 @@ Input rules:
 - quoted full-product plus acronym entries create acronym searches, for example `"SQL Server Management Studio" SSMS`
 - unquoted entries use the written phrase as the search target
 - blank lines and lines starting with `#` are ignored
-
-Example import result:
-
-```text
-PDF converter -> PDF converter download windows, PDF converter Windows Download, PDF converter in:name
-"SQL Server Management Studio" SSMS -> "SQL Server Management Studio" download, SSMS download, SSMS in:name
-```
 
 Use the quoted acronym form only for products where the acronym is a useful hunt target.
 
@@ -150,120 +142,60 @@ python grift.py --set-github-token
 python grift.py --set-triage-key
 ```
 
-`GITHUB_TOKEN` is used for GitHub API rate limits. `TRIAGE_KEY` is used only when Stage 2 options are requested. Keys are stored in `.env`, masked in output, and ignored by git.
+`GITHUB_TOKEN` is used for GitHub API rate limits. `TRIAGE_KEY` is used when Stage 2 options are requested. Keys are stored in `.env`, masked in output, and ignored by git.
 
 ### 1. Build the target list
 
-`input/apps.txt` is optional. Searches use `brands.yaml`, so rebuild `brands.yaml`
-after changing the source list.
+```bash
+python grift.py --import-apps input/apps.txt
+```
+
+### 2. Full pipeline: weekly scheduled run
+
+The full pipeline runs GitHub search, candidate scoring, payload URL enrichment, tria.ge lookup, tria.ge URL submission for new or lookup-error targets, report pull, and final IoC output. Passwords found in repository instructions are passed with submitted URL jobs.
 
 ```bash
-printf 'brands: []\ndefaults:\n  min_score_report: 4\n  per_query_results: 20\n' > brands.yaml && python grift.py --import-apps input/apps.txt && python grift.py --list-brands
+python grift.py --cron --full-run --skip-app-review --lookback-days 7 --min-score 4 --triage-min-score 8 --triage-max-urls 3 --triage-timeout 10 --out out/cron-latest
 ```
 
-### 2. Full read-only search
+The threshold values match the tested hunt settings. `--lookback-days 7` computes the GitHub `created:>` search bound from UTC today minus seven days. `--min-score 4` is the candidate reporting and URL-enrichment threshold. `--triage-min-score 8` limits tria.ge lookup and submission to the strongest candidates. `--triage-max-urls 3` checks up to three payload URLs per candidate. `--triage-timeout 10` gives each tria.ge API request ten seconds before the run moves on.
 
-This command runs GitHub search, candidate scoring, payload URL enrichment, and
-read-only tria.ge lookup. It does not submit samples to tria.ge.
+### 3. Full pipeline: fixed historical date
+
+Use a fixed date when reproducing a known hunt window.
 
 ```bash
-python grift.py --skip-app-review --created-after 2026-07-01 --enrich-urls --triage-lookup --triage-min-score 8 --triage-max-urls 3 --triage-timeout 10 --out out/run-$(date -u +%Y%m%dT%H%M%SZ)
+python grift.py --full-run --skip-app-review --created-after 2026-07-01 --min-score 4 --triage-min-score 8 --triage-max-urls 3 --triage-timeout 10 --out out/run-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
-Primary outputs:
-
-```text
-out/run-*/report_latest.md
-out/run-*/candidates_latest.json
-```
-
-### 3. Interactive app review
-
-Interactive runs show the configured app list before searching. At that prompt:
-
-- press Enter to continue with the current `brands.yaml`
-- type `import /absolute/path/to/apps.txt` to import a list immediately
-- type `edit` to stop and fix the list before searching
+`--created-after` and `--lookback-days` are mutually exclusive.
 
 ### 4. Stage 1 only: GitHub candidate queue
 
-Stage 1 searches GitHub, scores candidate repos, extracts README/download context, and writes the roll-up report. It does not contact tria.ge.
+Stage 1 searches GitHub, scores candidate repos, extracts README/download context, and writes the roll-up report. Use this mode for manual review, separate sandboxing, or malware-team handoff.
 
 ```bash
-python grift.py --created-after 2026-07-01 --out out/run-$(date -u +%Y%m%dT%H%M%SZ)
+python grift.py --created-after 2026-07-01 --min-score 4 --out out/run-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
-Useful Stage 1 variant with payload URL probing:
+Stage 1 with payload URL probing:
 
 ```bash
-python grift.py --skip-app-review --created-after 2026-07-01 --enrich-urls --out out/run-$(date -u +%Y%m%dT%H%M%SZ)
+python grift.py --skip-app-review --created-after 2026-07-01 --min-score 4 --enrich-urls --out out/run-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
-One target only:
+### 5. One target app full pipeline
+
+Use this when one app or lure family needs an isolated report.
 
 ```bash
-python grift.py --brand Audacity --created-after 2026-07-01
+python grift.py --full-run --brand Audacity --lookback-days 7 --min-score 4 --triage-min-score 8 --triage-max-urls 3 --triage-timeout 10 --out out/audacity-full
 ```
 
-Automation / cron:
+### 6. Pull reports for known tria.ge sample IDs
 
 ```bash
-python grift.py --cron --created-after 2026-07-01 --out out/cron-latest
-```
-
-In cron mode, `GITHUB_TOKEN` is required and prompts are disabled.
-
-### 5. Stage 1 + Stage 2 lookup: read-only tria.ge context
-
-This is the recommended full non-submitting run. It does Stage 1, enriches URLs, then checks tria.ge for existing reports tied to high-scoring candidate payload URLs.
-
-```bash
-python grift.py --skip-app-review --created-after 2026-07-01 --enrich-urls --triage-lookup --triage-min-score 8 --triage-max-urls 3 --triage-timeout 10 --out out/run-$(date -u +%Y%m%dT%H%M%SZ)
-```
-
-Look first at:
-
-```text
-out/run-*/report_latest.md
-out/run-*/candidates_latest.json
-```
-
-`report_latest.md` will include a compact tria.ge section when Stage 2 is enabled. `candidates_latest.json` keeps the structured lookup data.
-
-### 6. Stage 1 + Stage 2 submit: intentionally send candidate URLs to tria.ge
-
-Submission mode asks tria.ge to fetch and analyze candidate payload URLs. GRIFT requires the explicit safety flag.
-
-```bash
-python grift.py \
-  --skip-app-review \
-  --created-after 2026-07-01 \
-  --enrich-urls \
-  --triage-lookup \
-  --triage-submit \
-  --triage-submit-on-lookup-error \
-  --i-understand-this-submits-malware \
-  --triage-min-score 8 \
-  --triage-max-urls 3 \
-  --out out/run-$(date -u +%Y%m%dT%H%M%SZ)
-```
-
-Submission notes:
-
-- `--triage-submit` never runs without `--i-understand-this-submits-malware`.
-- By default, lookup errors do not force submissions. `--triage-submit-on-lookup-error` allows submission despite lookup timeout or failure.
-- Remote samples are submitted as tria.ge `kind=fetch` URL jobs with the extracted archive password when present.
-- The run report and JSON output contain submission status and sample IDs when tria.ge returns them.
-
-### 7. Pull full IoC reports for known tria.ge sample IDs
-
-Stage 2 lookup/submission data in `report_latest.md` is compact. Full IoC summaries are pulled separately by sample ID:
-
-```bash
-python grift.py \
-  --skip-app-review \
-  --out out/triage-report-$(date -u +%Y%m%dT%H%M%SZ) \
-  --triage-report SAMPLE_ID
+python grift.py --skip-app-review --out out/triage-report-$(date -u +%Y%m%dT%H%M%SZ) --triage-report SAMPLE_ID
 ```
 
 Example:
@@ -272,82 +204,92 @@ Example:
 python grift.py --skip-app-review --out out/triage-report-260730-e21nrscp71 --triage-report 260730-e21nrscp71
 ```
 
-This writes:
+This writes `triage_report_<sample_id>.json` and `triage_report_<sample_id>.md`.
+
+## Manpage
 
 ```text
-triage_report_<sample_id>.json
-triage_report_<sample_id>.md
+usage: grift.py [-h] [--brands BRANDS] [--out OUT]
+                [--created-after CREATED_AFTER]
+                [--lookback-days LOOKBACK_DAYS] [--brand BRANDS_FILTER]
+                [--per-query PER_QUERY] [--max-pages MAX_PAGES]
+                [--max-candidates MAX_CANDIDATES] [--min-score MIN_SCORE]
+                [--enrich-urls] [--max-enrich MAX_ENRICH]
+                [--sleep-on-rate-limit]
+                [--skip-contributors-gte SKIP_CONTRIBUTORS_GTE]
+                [--skip-top-files-gte SKIP_TOP_FILES_GTE]
+                [--skip-stars-gte SKIP_STARS_GTE]
+                [--skip-forks-gte SKIP_FORKS_GTE] [--defang-report]
+                [--raw-report] [--full-run] [--triage-lookup]
+                [--triage-submit] [--triage-min-score TRIAGE_MIN_SCORE]
+                [--triage-max-urls TRIAGE_MAX_URLS]
+                [--triage-profile TRIAGE_PROFILE]
+                [--triage-timeout TRIAGE_TIMEOUT]
+                [--triage-submit-on-lookup-error]
+                [--triage-report TRIAGE_REPORTS]
+                [--i-understand-this-submits-malware] [--cron] [--yes]
+                [--prompt-timeout PROMPT_TIMEOUT] [--env-file ENV_FILE]
+                [--require-github-token] [--init] [--set-github-token]
+                [--set-triage-key] [--import-apps IMPORT_APPS]
+                [--skip-app-review] [--validate-only] [--list-brands]
+                [--add-brand NAME] [--query ADD_QUERIES] [--product PRODUCTS]
+                [--official-org OFFICIAL_ORGS]
+                [--official-domain OFFICIAL_DOMAINS] [--notes NOTES]
 ```
 
-The Markdown report includes high-scoring tasks, high-scoring files, and bulk-copy SHA256/SHA1/MD5 blocks.
-
-## Command-line options
-
-### Workspace, keys, and validation
-
-| Option | Meaning |
-|---|---|
-| `--init` | Create `input/`, `out/`, `logs/`, `.env`, and seed files. |
-| `--env-file PATH` | Load keys from a specific `.env` file instead of the default local `.env`. |
-| `--set-github-token` | Prompt for `GITHUB_TOKEN` and store it in `.env` with restrictive permissions. |
-| `--set-triage-key` | Prompt for `TRIAGE_KEY` and store it in `.env` with restrictive permissions. |
-| `--validate-only` | Validate app list, arguments, and required keys for the selected options, then exit without searching. |
-| `--require-github-token` | Fail if `GITHUB_TOKEN` is missing. Useful before large or automated searches. |
-| `--cron` | Non-interactive mode for scheduled runs. Disables prompts and requires `GITHUB_TOKEN`. |
-| `--yes`, `--non-interactive` | Skip interactive prompts without enabling every cron behavior. |
-| `--prompt-timeout SECONDS` | Wait only this long at interactive prompts before using the default answer. |
-
-### App target management
-
-| Option | Meaning |
-|---|---|
-| `--import-apps input/apps.txt` | Import app seeds into `brands.yaml`. Quoted full-product plus acronym lines create acronym aliases. |
-| `--list-brands` | Show configured targets, product aliases, derived queries, official org/domain suppressors, and notes. |
-| `--skip-app-review` | Do not show the interactive configured-app review prompt before searching. |
-| `--add-brand NAME` | Add or update a target in `brands.yaml`. |
-| `--query TEXT` | With `--add-brand`: add a GitHub search query. Repeatable. |
-| `--product TEXT` | With `--add-brand`: add a product alias such as `'"SQL Server Management Studio" SSMS'`. Repeatable. |
-| `--official-org ORG` | With `--add-brand`: add a GitHub org suppressor. Repeatable. |
-| `--official-domain DOMAIN` | With `--add-brand`: add a domain/repo suppressor. Repeatable. |
-| `--notes TEXT` | With `--add-brand`: store analyst notes for the target. |
-
-### Stage 1 GitHub search and scoring
-
-| Option | Meaning |
-|---|---|
-| `--brand NAME` | Run only one configured target. Repeat the flag for multiple targets. |
-| `--created-after YYYY-MM-DD` | Add a GitHub `created:>` filter to favor fresh lures. |
-| `--per-query N` | GitHub results per search page, 1 to 100. |
-| `--max-pages N` | Search pages per query. |
-| `--max-candidates N` | Hard cap on unique repos enriched. |
-| `--min-score N` | Minimum score included in Markdown reports. Lower keeps more noise; higher is stricter. |
-| `--skip-contributors-gte N` | Drop likely real projects with at least this many contributors. |
-| `--skip-top-files-gte N` | Drop likely real projects with at least this many top-level files. |
-| `--skip-stars-gte N` | Drop repos with too much social proof. |
-| `--skip-forks-gte N` | Drop repos with too many forks. |
-| `--enrich-urls` | Probe top payload URLs for high-scoring candidates. Helpful before Stage 2. |
-| `--max-enrich N` | Maximum URL-enrichment attempts. |
-| `--sleep-on-rate-limit` | Sleep and retry when GitHub rate limits are encountered. |
-| `--out DIR` | Output directory for JSON, CSV, and Markdown reports. |
-| `--raw-report` | Do not defang URLs in Markdown. JSON and CSV always keep raw URLs. |
-
-### Stage 2 tria.ge lookup, submission, and report pulls
-
-| Option | Meaning |
-|---|---|
-| `--triage-lookup` | Read-only Stage 2: look up payload URLs in tria.ge for candidates at or above `--triage-min-score`. |
-| `--triage-submit` | Submit candidate payload URLs to tria.ge. Requires `--i-understand-this-submits-malware`. |
-| `--triage-submit-on-lookup-error` | Submit even when lookup times out or fails. Still requires the submit safety flag. |
-| `--i-understand-this-submits-malware` | Explicit safety acknowledgement required for submissions. |
-| `--triage-min-score N` | Minimum candidate score for Stage 2 lookup/submission. Default is `8`. |
-| `--triage-max-urls N` | Maximum candidate payload URLs sent to Stage 2 per candidate. Default is `3`. |
-| `--triage-profile NAME` | tria.ge analysis profile for URL submissions. Default is `default`. |
-| `--triage-timeout SECONDS` | Per-request tria.ge API timeout. Default is `10`. |
-| `--triage-report SAMPLE_ID` | Pull and summarize an existing tria.ge sample ID. Repeatable. Writes `triage_report_<sample_id>.*`. |
+| Option | Value | Meaning |
+|---|---|---|
+| `--full-run` | none | Run the full pipeline: GitHub hunt, URL enrichment, tria.ge lookup, tria.ge submission for new or lookup-error targets, report pull, and final IoC output. |
+| `-h`, `--help` | none | Show help and exit. |
+| `--brands` | BRANDS | Path to `brands.yaml`. |
+| `--out` | OUT | Output directory. |
+| `--created-after` | CREATED_AFTER | Append `created:>YYYY-MM-DD` to GitHub queries. Use for fixed historical reproduction. |
+| `--lookback-days` | LOOKBACK_DAYS | Append `created:>DATE` using UTC today minus this many days. Use for scheduled runs. |
+| `--brand` | BRANDS_FILTER | Run only the named configured target. Can be repeated. |
+| `--per-query` | PER_QUERY | Results per GitHub search query, 1 to 100. |
+| `--max-pages` | MAX_PAGES | Search result pages per query. |
+| `--max-candidates` | MAX_CANDIDATES | Stop after this many unique repositories. |
+| `--min-score` | MIN_SCORE | Minimum score for Markdown reporting and URL enrichment. Tested value: 4. |
+| `--enrich-urls` | none | HEAD/Range probe payload URLs for candidates at or above `--min-score`. |
+| `--max-enrich` | MAX_ENRICH | Maximum URLs to enrich per candidate. Default: 3. |
+| `--sleep-on-rate-limit` | none | Sleep until GitHub rate-limit reset instead of stopping. |
+| `--skip-contributors-gte` | SKIP_CONTRIBUTORS_GTE | Drop candidates with at least this many observed contributors. Default: 3. |
+| `--skip-top-files-gte` | SKIP_TOP_FILES_GTE | Drop candidates with at least this many meaningful top-level files. Default: 6. |
+| `--skip-stars-gte` | SKIP_STARS_GTE | Drop candidates with at least this many stars. Default: 10. |
+| `--skip-forks-gte` | SKIP_FORKS_GTE | Drop candidates with at least this many forks. Default: 3. |
+| `--defang-report` | none | Defang URLs in Markdown output. This is the default. |
+| `--raw-report` | none | Do not defang URLs in Markdown output. |
+| `--triage-lookup` | none | Look up candidate payload URLs in tria.ge for candidates at or above `--triage-min-score`. |
+| `--triage-submit` | none | Submit candidate payload URLs to tria.ge. Use `--full-run` for the normal full-pipeline workflow. Direct use requires `--i-understand-this-submits-malware`. |
+| `--triage-min-score` | TRIAGE_MIN_SCORE | Minimum candidate score for tria.ge lookup/submission. Tested value: 8. |
+| `--triage-max-urls` | TRIAGE_MAX_URLS | Maximum candidate payload URLs checked per candidate. Tested value: 3. |
+| `--triage-profile` | TRIAGE_PROFILE | tria.ge analysis profile for URL submissions. Default: `default`. |
+| `--triage-timeout` | TRIAGE_TIMEOUT | Seconds to wait for each tria.ge API request. Tested value: 10. |
+| `--triage-submit-on-lookup-error` | none | Submit when tria.ge lookup times out or fails. Direct use requires submission mode and the acknowledgement flag. |
+| `--triage-report` | TRIAGE_REPORTS | Pull and summarize an existing tria.ge sample ID. Can be repeated. |
+| `--i-understand-this-submits-malware` | none | Required acknowledgement for direct `--triage-submit` usage. `--full-run` is the preferred full-pipeline switch. |
+| `--cron` | none | Non-interactive mode for scheduled runs. Disables prompts and requires `GITHUB_TOKEN`. |
+| `--yes`, `--non-interactive` | none | Same prompt behavior as `--cron`. |
+| `--prompt-timeout` | PROMPT_TIMEOUT | Seconds to wait for key prompts before defaulting. |
+| `--env-file` | ENV_FILE | Optional `.env` path. |
+| `--require-github-token` | none | Fail if `GITHUB_TOKEN` is missing. |
+| `--init` | none | Create input/out/logs directories and a chmod 600 `.env` placeholder. |
+| `--set-github-token` | none | Prompt for and store `GITHUB_TOKEN` in `.env`. |
+| `--set-triage-key` | none | Prompt for and store `TRIAGE_KEY` in `.env`. |
+| `--import-apps` | IMPORT_APPS | Import app seeds from a text file into `brands.yaml`. |
+| `--skip-app-review` | none | Do not show the configured app list before interactive runs. |
+| `--validate-only` | none | Validate `brands.yaml`, keys, and arguments, then exit. |
+| `--list-brands` | none | Print configured brand targets and related query context. |
+| `--add-brand` | NAME | Add or update a brand. |
+| `--query` | ADD_QUERIES | With `--add-brand`, add a search query. Can be repeated. |
+| `--product` | PRODUCTS | With `--add-brand`, add a product seed, for example `'"SQL Server Management Studio" SSMS'`. Can be repeated. |
+| `--official-org` | OFFICIAL_ORGS | With `--add-brand`, add an official GitHub organization suppressor. Can be repeated. |
+| `--official-domain` | OFFICIAL_DOMAINS | With `--add-brand`, add an official domain or repository suppressor. Can be repeated. |
+| `--notes` | NOTES | With `--add-brand`, store a notes string. |
 
 ## Stage 2 tria.ge behavior
 
-Stage 1 always runs without tria.ge. Stage 2 only runs when a Stage 2 flag is requested and a `TRIAGE_KEY` is available.
+Stage 1 always runs without tria.ge. Stage 2 runs when `--full-run` or another Stage 2 flag is requested and a `TRIAGE_KEY` is available.
 
 Stage 2:
 
@@ -356,7 +298,7 @@ Stage 2:
 - submits remote samples as tria.ge `kind=fetch` URL jobs with archive password, `interactive=false`, `timeout=200`, and `network=internet`
 - only considers candidates at or above `--triage-min-score`
 - stores lookup and submission results inside `candidates_*.json`
-- pulls the referenced tria.ge reports for lookup hits and successful submissions
+- pulls referenced tria.ge reports for lookup hits and successful submissions
 - writes concise final IoC reports as `final_iocs_latest.json` and `final_iocs_latest.txt`
 - adds a compact tria.ge section to the run Markdown report
 - never stores or prints the tria.ge API key
