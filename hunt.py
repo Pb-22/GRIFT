@@ -416,6 +416,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--skip-forks-gte", type=int, default=3, help="Drop candidates with at least this many forks")
     p.add_argument("--defang-report", action="store_true", default=True, help="Defang URLs in Markdown output (default)")
     p.add_argument("--raw-report", action="store_true", help="Do not defang URLs in Markdown output")
+    p.add_argument("--full-run", action="store_true", help="Run the full pipeline: GitHub hunt, URL enrichment, tria.ge lookup, tria.ge submission for new/error lookup targets, report pull, and final IoC output")
 
     # Optional Stage 2 tria.ge enrichment. Lookup is read-only against existing
     # tria.ge reports. Submit is gated by an explicit safety acknowledgement.
@@ -462,6 +463,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         except ValueError as e:
             print(str(e), file=sys.stderr)
             return 2
+    if args.full_run:
+        args.enrich_urls = True
+        args.triage_lookup = True
+        args.triage_submit = True
+        args.triage_submit_on_lookup_error = True
 
     non_interactive = bool(args.cron or args.non_interactive)
     prompt_timeout: Optional[float]
@@ -472,7 +478,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if non_interactive:
         prompt_timeout = 0.0
 
-    if args.triage_submit and not args.i_understand_this_submits_malware:
+    if args.triage_submit and not args.full_run and not args.i_understand_this_submits_malware:
         print("--triage-submit requires --i-understand-this-submits-malware", file=sys.stderr)
         return 2
 
