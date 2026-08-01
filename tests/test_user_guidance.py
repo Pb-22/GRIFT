@@ -2,10 +2,11 @@ import io
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from hunt import attach_triage_reports, import_apps_file, review_configured_brands
+from hunt import attach_triage_reports, created_after_from_lookback_days, import_apps_file, review_configured_brands
 from lib.brands import add_brand, load_brands, validate_brands
 from lib.github_client import GitHubClient
 from lib.report import write_final_ioc_outputs, write_outputs
@@ -13,6 +14,11 @@ from lib.triage import write_triage_report_outputs
 
 
 class UserGuidanceTests(unittest.TestCase):
+    def test_created_after_from_lookback_days_uses_utc_date_minus_days(self):
+        now = datetime(2026, 8, 1, 12, 30, tzinfo=timezone.utc)
+
+        self.assertEqual(created_after_from_lookback_days(7, now=now), "2026-07-25")
+
     def test_import_explicit_multiword_alias_generates_acronym_alias_and_queries(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

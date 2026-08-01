@@ -9,7 +9,7 @@ import os
 import stat
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -32,6 +32,16 @@ def build_query(base: str, created_after: Optional[str]) -> str:
     if created_after and "created:" not in q:
         q = f"{q} created:>{created_after}"
     return q
+
+
+def created_after_from_lookback_days(days: int, now: Optional[datetime] = None) -> str:
+    """Return a UTC YYYY-MM-DD created-after date for a lookback window."""
+    if days <= 0:
+        raise ValueError("lookback days must be greater than zero")
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return (current.astimezone(timezone.utc).date() - timedelta(days=days)).isoformat()
 
 
 def clamp(value: int, low: int, high: int) -> int:
@@ -391,6 +401,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--brands", type=Path, default=ROOT / "brands.yaml", help="Path to brands.yaml")
     p.add_argument("--out", type=Path, default=ROOT / "out", help="Output directory")
     p.add_argument("--created-after", default=None, help="Append created:>YYYY-MM-DD to queries")
+    p.add_argument("--lookback-days", type=int, default=None, help="Append created:>DATE using UTC today minus this many days; useful for weekly cron/systemd runs")
     p.add_argument("--brand", action="append", dest="brands_filter", help="Only these brand names")
     p.add_argument("--per-query", type=int, default=None, help="Results per search query, 1-100")
     p.add_argument("--max-pages", type=int, default=None, help="Search result pages per query")
@@ -441,6 +452,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--notes", default="", help="With --add-brand: notes string")
 
     args = p.parse_args(argv)
+
+    if args.created_after and args.lookback_days is not None:
+        print("Use either --created-after or --lookback-days, not both", file=sys.stderr)
+        return 2
+    if args.lookback_days is not None:
+        try:
+            args.created_after = created_after_from_lookback_days(args.lookback_days)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
 
     non_interactive = bool(args.cron or args.non_interactive)
     prompt_timeout: Optional[float]
