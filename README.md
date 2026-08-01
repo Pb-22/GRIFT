@@ -42,14 +42,6 @@ python grift.py --init
 
 ## Keys
 
-GRIFT loads secrets in this order:
-
-1. environment variables
-2. local `.env`
-3. interactive prompt when needed
-
-Supported keys:
-
 - `GITHUB_TOKEN`: recommended for reliable GitHub API search and rate limits
 - `TRIAGE_KEY`: only needed when Stage 2 tria.ge flags are used
 
