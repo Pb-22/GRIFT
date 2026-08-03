@@ -1,4 +1,4 @@
-# GRIFT — GitHub README Impostor Fakeware Tracker
+# GRIFT: GitHub README Impostor Fakeware Tracker
 
 GRIFT hunts short-lived GitHub README impostor fakeware: SEO-facing fake application or download repositories, often README-only, zero-reputation, and pointing to passworded or offsite payloads.
 
